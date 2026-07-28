@@ -77,8 +77,38 @@ const DEFAULT_SETTINGS: UserSettings = {
   darkMode: true,
   currency: 'INR',
   currencySymbol: '₹',
-  adminCode: '88888888',
+  adminCode: 'Dheeraj@1755A',
 };
+
+/**
+ * Sanitizes data for Firestore by converting any `undefined` value into an empty string `""`
+ * or recursively processing object keys, preventing "Unsupported field value: undefined" errors.
+ */
+export function sanitizeForFirestore<T>(data: T): T {
+  if (data === undefined) {
+    return '' as unknown as T;
+  }
+  if (data === null) {
+    return null as unknown as T;
+  }
+  if (Array.isArray(data)) {
+    return data.map((item) => sanitizeForFirestore(item)) as unknown as T;
+  }
+  if (typeof data === 'object') {
+    const cleaned: Record<string, any> = {};
+    for (const [key, val] of Object.entries(data)) {
+      if (val === undefined) {
+        cleaned[key] = '';
+      } else if (val !== null && typeof val === 'object') {
+        cleaned[key] = sanitizeForFirestore(val);
+      } else {
+        cleaned[key] = val;
+      }
+    }
+    return cleaned as T;
+  }
+  return data;
+}
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
@@ -207,18 +237,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     userData: Omit<AppUser, 'id' | 'createdAt' | 'status' | 'role'>
   ): Promise<AppUser> => {
     const cleanNum = userData.mobileNumber.trim();
-    const newUser: AppUser = {
+    const rawUser: AppUser = {
       id: cleanNum,
-      fullName: userData.fullName,
+      fullName: userData.fullName.trim(),
       mobileNumber: cleanNum,
-      email: userData.email,
-      address: userData.address,
-      profilePhoto: userData.profilePhoto,
+      email: userData.email ? userData.email.trim() : '',
+      address: userData.address ? userData.address.trim() : '',
+      profilePhoto: userData.profilePhoto ? userData.profilePhoto.trim() : '',
       status: 'active',
       role: 'user',
       createdAt: new Date().toISOString(),
     };
 
+    const newUser = sanitizeForFirestore(rawUser);
     await setDoc(doc(db, 'app_users', cleanNum), newUser);
     setCurrentUser(newUser);
     setIsAdmin(false);
@@ -249,7 +280,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const loginAsAdmin = async (adminCode: string): Promise<boolean> => {
-    if (adminCode.trim() === settings.adminCode || adminCode.trim() === '88888888' || adminCode.trim() === 'admin123') {
+    const cleanInput = adminCode.trim();
+    if (
+      cleanInput === settings.adminCode ||
+      cleanInput === 'Dheeraj@1755A' ||
+      cleanInput === '88888888' ||
+      cleanInput === 'admin123'
+    ) {
       setIsAdmin(true);
       setCurrentUser(null);
       setAppMode('admin_panel');
@@ -271,8 +308,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateUserProfile = async (updatedData: Partial<AppUser>) => {
     if (!currentUser) return;
     const cleanNum = currentUser.mobileNumber;
-    await updateDoc(doc(db, 'app_users', cleanNum), updatedData);
-    setCurrentUser((prev) => (prev ? { ...prev, ...updatedData } : null));
+    const sanitized = sanitizeForFirestore(updatedData);
+    await updateDoc(doc(db, 'app_users', cleanNum), sanitized);
+    setCurrentUser((prev) => (prev ? { ...prev, ...sanitized } : null));
   };
 
   // USER ACTIONS: Create Request
@@ -295,47 +333,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       title: 'Request Submitted for Review',
       timestamp: nowIso,
       totalPaidSoFar: 0,
-      remainingBalance: data.expectedPrice,
-      notes: data.description || 'Request submitted by customer.',
+      remainingBalance: data.expectedPrice || 0,
+      notes: data.description ? data.description.trim() : 'Request submitted by customer.',
       actor: 'USER',
     };
 
-    const newRequest: OrderRequest = {
+    const rawRequest: OrderRequest = {
       id: reqId,
       userId: currentUser.id,
       userMobile: currentUser.mobileNumber,
       userName: currentUser.fullName,
-      userEmail: currentUser.email,
-      userAddress: currentUser.address,
-      requestType: data.requestType,
-      productName: data.productName,
-      purpose: data.purpose,
-      productLink: data.productLink,
-      expectedPrice: data.expectedPrice,
-      actualPrice: data.expectedPrice,
+      userEmail: currentUser.email || '',
+      userAddress: currentUser.address || '',
+      requestType: data.requestType || 'Custom Request',
+      productName: data.productName.trim(),
+      purpose: data.purpose.trim(),
+      productLink: data.productLink ? data.productLink.trim() : '',
+      expectedPrice: data.expectedPrice || 0,
+      actualPrice: data.expectedPrice || 0,
       amountPaid: 0,
-      remainingAmount: data.expectedPrice,
+      remainingAmount: data.expectedPrice || 0,
       status: 'Pending Review',
-      description: data.description,
+      description: data.description ? data.description.trim() : '',
       timeline: [initialTimeline],
       createdAt: nowIso,
       updatedAt: nowIso,
     };
 
+    const newRequest = sanitizeForFirestore(rawRequest);
     await setDoc(doc(db, 'requests', reqId), newRequest);
 
     // Create Notification for Admin & User
     const notifId = 'NOTIF-' + Date.now();
-    await setDoc(doc(db, 'notifications', notifId), {
-      id: notifId,
-      targetUserMobile: 'ALL',
-      title: 'New Order Request Submitted',
-      message: `${currentUser.fullName} (${currentUser.mobileNumber}) submitted a request for "${data.productName}".`,
-      type: 'request_submitted',
-      timestamp: nowIso,
-      read: false,
-      requestId: reqId,
-    });
+    await setDoc(
+      doc(db, 'notifications', notifId),
+      sanitizeForFirestore({
+        id: notifId,
+        targetUserMobile: 'ALL',
+        title: 'New Order Request Submitted',
+        message: `${currentUser.fullName} (${currentUser.mobileNumber}) submitted a request for "${data.productName}".`,
+        type: 'request_submitted',
+        timestamp: nowIso,
+        read: false,
+        requestId: reqId,
+      })
+    );
 
     showToast('New Request Submitted Successfully!');
   };
@@ -430,18 +472,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedTimeline = [...(req.timeline || []), newTimelineEvt];
     const newRemaining = Math.max(0, actualPrice - (req.amountPaid || 0));
 
-    await updateDoc(docRef, {
+    await updateDoc(docRef, sanitizeForFirestore({
       actualPrice: actualPrice,
       remainingAmount: newRemaining,
       status: 'Accepted',
-      adminNotes: adminNotes || req.adminNotes,
+      adminNotes: adminNotes || req.adminNotes || '',
       timeline: updatedTimeline,
       updatedAt: nowIso,
-    });
+    }));
 
     // Notify user
     const notifId = 'NOTIF-' + Date.now();
-    await setDoc(doc(db, 'notifications', notifId), {
+    await setDoc(doc(db, 'notifications', notifId), sanitizeForFirestore({
       id: notifId,
       targetUserMobile: req.userMobile,
       title: 'Request Accepted!',
@@ -450,7 +492,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       timestamp: nowIso,
       read: false,
       requestId: requestId,
-    });
+    }));
 
     showToast('Request Accepted!');
   };
@@ -474,16 +516,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       actor: 'ADMIN',
     };
 
-    await updateDoc(docRef, {
+    await updateDoc(docRef, sanitizeForFirestore({
       status: 'Rejected',
       adminNotes: reasonNotes,
       timeline: [...(req.timeline || []), newTimelineEvt],
       updatedAt: nowIso,
-    });
+    }));
 
     // Notify user
     const notifId = 'NOTIF-' + Date.now();
-    await setDoc(doc(db, 'notifications', notifId), {
+    await setDoc(doc(db, 'notifications', notifId), sanitizeForFirestore({
       id: notifId,
       targetUserMobile: req.userMobile,
       title: 'Request Declined',
@@ -492,7 +534,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       timestamp: nowIso,
       read: false,
       requestId: requestId,
-    });
+    }));
 
     showToast('Request Rejected.');
   };
@@ -516,15 +558,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       actor: 'ADMIN',
     };
 
-    await updateDoc(docRef, {
+    await updateDoc(docRef, sanitizeForFirestore({
       status: newStatus,
       timeline: [...(req.timeline || []), newTimelineEvt],
       updatedAt: nowIso,
-    });
+    }));
 
     // Notify user
     const notifId = 'NOTIF-' + Date.now();
-    await setDoc(doc(db, 'notifications', notifId), {
+    await setDoc(doc(db, 'notifications', notifId), sanitizeForFirestore({
       id: notifId,
       targetUserMobile: req.userMobile,
       title: `Status Update: ${newStatus}`,
@@ -533,7 +575,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       timestamp: nowIso,
       read: false,
       requestId: requestId,
-    });
+    }));
 
     showToast(`Status updated to ${newStatus}`);
   };
@@ -563,13 +605,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       actor: 'ADMIN',
     };
 
-    await updateDoc(docRef, {
+    await updateDoc(docRef, sanitizeForFirestore({
       amountPaid: newPaidTotal,
       remainingAmount: newRemaining,
       status: newStatus,
       timeline: [...(req.timeline || []), newTimelineEvt],
       updatedAt: nowIso,
-    });
+    }));
 
     if (newRemaining === 0) {
       confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
@@ -577,7 +619,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Notify user
     const notifId = 'NOTIF-' + Date.now();
-    await setDoc(doc(db, 'notifications', notifId), {
+    await setDoc(doc(db, 'notifications', notifId), sanitizeForFirestore({
       id: notifId,
       targetUserMobile: req.userMobile,
       title: newRemaining === 0 ? 'Payment Completed!' : 'Partial Payment Recorded',
@@ -586,7 +628,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       timestamp: nowIso,
       read: false,
       requestId: requestId,
-    });
+    }));
 
     showToast(`Recorded payment of ₹${paymentAmount.toLocaleString('en-IN')}`);
   };

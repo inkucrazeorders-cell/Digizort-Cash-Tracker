@@ -84,9 +84,9 @@ export const MobileAuthScreen: React.FC = () => {
       await registerUser({
         fullName: fullName.trim(),
         mobileNumber: mobileNumber.trim(),
-        email: email.trim() || undefined,
-        address: address.trim() || undefined,
-        profilePhoto: profilePhoto.trim() || undefined,
+        email: email.trim() || '',
+        address: address.trim() || '',
+        profilePhoto: profilePhoto.trim() || '',
       });
       showToast(`Welcome to DIGIZORT, ${fullName.trim()}!`);
     } catch (err: any) {
@@ -419,13 +419,12 @@ export const MobileAuthScreen: React.FC = () => {
               <input
                 type="password"
                 required
-                placeholder="Enter admin code (e.g. 88888888)"
+                placeholder="Enter admin security passkey"
                 value={adminCodeInput}
                 onChange={(e) => setAdminCodeInput(e.target.value)}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-3 text-white text-sm font-bold focus:outline-none focus:border-[#E53935]"
                 id="input-admin-code"
               />
-              <p className="text-[10px] text-zinc-500 mt-1">Default Admin Code: 88888888</p>
             </div>
 
             <div className="space-y-2">
