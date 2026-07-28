@@ -1,0 +1,28 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow access to app_users collection
+    match /app_users/{userId} {
+      allow read, write: if true;
+    }
+    
+    // Allow access to requests / transactions collection
+    match /requests/{requestId} {
+      allow read, write: if true;
+    }
+
+    // Allow access to notifications collection
+    match /notifications/{notificationId} {
+      allow read, write: if true;
+    }
+
+    // Legacy fallback user documents
+    match /users/{userId} {
+      allow read, write: if true;
+      match /{allSubcollections=**} {
+        allow read, write: if true;
+      }
+    }
+  }
+}

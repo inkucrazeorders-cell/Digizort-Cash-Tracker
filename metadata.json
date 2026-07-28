@@ -1,0 +1,6 @@
+{
+  "name": "DIGIZORT CASH TRACKER",
+  "description": "DIGIZORT Order Request, Payment Tracking and Customer Management System for users and administrators.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

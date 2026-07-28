@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "users": {
+      "path": "users/{userId}",
+      "fields": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    },
+    "transactions": {
+      "path": "users/{userId}/transactions/{transactionId}",
+      "fields": {
+        "friendName": { "type": "string" },
+        "phone": { "type": "string" },
+        "amount": { "type": "number" },
+        "amountPaid": { "type": "number" },
+        "remainingAmount": { "type": "number" },
+        "purpose": { "type": "string" },
+        "category": { "type": "string" },
+        "date": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" },
+        "paidAt": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "deletedAt": { "type": "string" },
+        "timeline": { "type": "array" },
+        "userId": { "type": "string" }
+      }
+    },
+    "notifications": {
+      "path": "users/{userId}/notifications/{notificationId}",
+      "fields": {
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "read": { "type": "boolean" },
+        "transactionId": { "type": "string" },
+        "userId": { "type": "string" }
+      }
+    },
+    "settings": {
+      "path": "users/{userId}/settings/{settingsId}",
+      "fields": {
+        "darkMode": { "type": "boolean" },
+        "currency": { "type": "string" },
+        "currencySymbol": { "type": "string" },
+        "autoRemindDays": { "type": "number" },
+        "userId": { "type": "string" }
+      }
+    }
+  }
+}
