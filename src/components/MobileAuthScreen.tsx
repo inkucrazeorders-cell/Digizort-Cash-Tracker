@@ -27,13 +27,12 @@ export const MobileAuthScreen: React.FC = () => {
     showToast,
   } = useApp();
 
-  const [step, setStep] = useState<'mobile' | 'unregistered' | 'register' | 'pin' | 'admin'>('mobile');
+  const [step, setStep] = useState<'mobile' | 'unregistered' | 'register' | 'admin'>('mobile');
   const [mobileNumber, setMobileNumber] = useState('');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
   const [profilePhoto, setProfilePhoto] = useState('');
-  const [pin, setPin] = useState('1234');
   const [adminCodeInput, setAdminCodeInput] = useState('');
 
   const [isLoading, setIsLoading] = useState(false);
@@ -60,11 +59,12 @@ export const MobileAuthScreen: React.FC = () => {
           setErrorMsg('This account has been suspended by Admin. Please contact support.');
           return;
         }
-        setStep('pin');
+        // Direct login with mobile number - no OTP/PIN verification needed
+        await loginWithMobile(cleanedMobile);
       }
     } catch (err: any) {
       console.error(err);
-      setErrorMsg('Failed to check mobile number. Please try again.');
+      setErrorMsg(err.message || 'Failed to login. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -92,21 +92,6 @@ export const MobileAuthScreen: React.FC = () => {
     } catch (err: any) {
       console.error(err);
       setErrorMsg(err.message || 'Registration failed. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handlePinSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg(null);
-
-    try {
-      setIsLoading(true);
-      await loginWithMobile(mobileNumber.trim(), pin);
-    } catch (err: any) {
-      console.error(err);
-      setErrorMsg(err.message || 'Login failed.');
     } finally {
       setIsLoading(false);
     }
@@ -345,61 +330,7 @@ export const MobileAuthScreen: React.FC = () => {
           </form>
         )}
 
-        {/* STEP 4: Registered PIN Verification */}
-        {step === 'pin' && (
-          <form onSubmit={handlePinSubmit} className="space-y-5 text-center">
-            <div className="space-y-1">
-              <div className="w-12 h-12 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto mb-2">
-                <UserCheck className="w-6 h-6" />
-              </div>
-              <h2 className="text-lg font-bold text-white">Welcome Back!</h2>
-              <p className="text-xs text-zinc-400">
-                Registered Mobile: <span className="font-bold text-white">{mobileNumber}</span>
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-zinc-300">
-                Enter 4-Digit Security PIN
-              </label>
-              <input
-                type="password"
-                maxLength={4}
-                value={pin}
-                onChange={(e) => setPin(e.target.value)}
-                className="w-36 mx-auto text-center bg-zinc-950 border border-zinc-800 rounded-xl py-3 text-white text-xl font-extrabold tracking-widest focus:outline-none focus:border-[#E53935]"
-                id="input-user-pin"
-              />
-              <p className="text-[11px] text-zinc-500">Default PIN: 1234</p>
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full py-3.5 px-4 bg-gradient-to-r from-[#E53935] to-[#B71C1C] hover:brightness-110 text-white font-bold text-sm rounded-xl shadow-lg shadow-[#E53935]/25 flex items-center justify-center gap-2 transition-all"
-              id="btn-login-dashboard"
-            >
-              {isLoading ? (
-                <span>Entering Portal...</span>
-              ) : (
-                <>
-                  <ShieldCheck className="w-4 h-4" />
-                  <span>Enter My Dashboard</span>
-                </>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setStep('mobile')}
-              className="text-xs text-zinc-400 hover:text-white transition-colors"
-            >
-              Use a different mobile number
-            </button>
-          </form>
-        )}
-
-        {/* STEP 5: Admin Panel Mode */}
+        {/* STEP 4: Admin Panel Mode */}
         {step === 'admin' && (
           <form onSubmit={handleAdminSubmit} className="space-y-5">
             <div className="text-center space-y-1">
