@@ -1,12 +1,18 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { MobileAuthScreen } from './components/MobileAuthScreen';
 import { UserPortal } from './components/UserPortal';
 import { AdminPanel } from './components/AdminPanel';
+import { SplashLoadingScreen } from './components/SplashLoadingScreen';
 import { motion, AnimatePresence } from 'motion/react';
 
 const MainViewRouter: React.FC = () => {
   const { appMode } = useApp();
+  const [isLoading, setIsLoading] = useState(true);
+
+  if (isLoading) {
+    return <SplashLoadingScreen onComplete={() => setIsLoading(false)} />;
+  }
 
   return (
     <AnimatePresence mode="wait">

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { useApp } from '../context/AppContext';
+import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
 import {
   Smartphone,
   UserCheck,
@@ -128,8 +129,12 @@ export const MobileAuthScreen: React.FC = () => {
       >
         {/* Branding Header */}
         <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center p-3 rounded-2xl bg-gradient-to-tr from-[#E53935] to-[#B71C1C] text-white shadow-lg shadow-[#E53935]/30 mb-2">
-            <Sparkles className="w-7 h-7" />
+          <div className="flex items-center justify-center mb-2">
+            <img
+              src={OFFICIAL_DIGIZORT_LOGO}
+              alt="DIGIZORT Logo"
+              className="w-20 h-20 sm:w-24 sm:h-24 object-contain drop-shadow-[0_0_20px_rgba(229,57,53,0.4)]"
+            />
           </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-zinc-200 to-zinc-400">
             DIGIZORT

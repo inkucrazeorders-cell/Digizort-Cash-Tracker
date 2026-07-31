@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { OrderRequest } from '../types';
 import { useApp } from '../context/AppContext';
+import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import {
@@ -267,10 +268,13 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
         {/* Card Header Bar */}
         <div className="flex items-start justify-between border-b border-zinc-800 pb-5">
           <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <div className="p-2 rounded-xl bg-gradient-to-tr from-[#E53935] to-[#B71C1C] text-white shadow-md">
-                <Sparkles className="w-5 h-5" />
-              </div>
+            <div className="flex items-center gap-2.5">
+              <img
+                src={OFFICIAL_DIGIZORT_LOGO}
+                alt="DIGIZORT Logo"
+                crossOrigin="anonymous"
+                className="w-8 h-8 object-contain drop-shadow-[0_0_10px_rgba(229,57,53,0.4)]"
+              />
               <h2 className="text-xl font-extrabold tracking-tight text-white">DIGIZORT</h2>
             </div>
             <p className="text-[10px] uppercase font-bold tracking-widest text-zinc-400">

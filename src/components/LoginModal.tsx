@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../context/AppContext';
+import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
 import { X, Mail, Lock, Cloud, Sparkles, CheckCircle2 } from 'lucide-react';
 
 export const LoginModal: React.FC = () => {
@@ -70,8 +71,12 @@ export const LoginModal: React.FC = () => {
 
           <div className="p-6 sm:p-8 space-y-6">
             <div className="text-center space-y-2">
-              <div className="w-12 h-12 rounded-2xl bg-[#E53935]/15 text-[#E53935] flex items-center justify-center mx-auto font-black text-xl border border-[#E53935]/30">
-                D
+              <div className="flex justify-center mx-auto">
+                <img
+                  src={OFFICIAL_DIGIZORT_LOGO}
+                  alt="DIGIZORT Logo"
+                  className="w-16 h-16 object-contain drop-shadow-[0_0_15px_rgba(229,57,53,0.4)]"
+                />
               </div>
               <h3 className="text-xl font-bold text-white">
                 {isSignUp ? 'Create Cloud Account' : 'Sign In to DIGIZORT'}

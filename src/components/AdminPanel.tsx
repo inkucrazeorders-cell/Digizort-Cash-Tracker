@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../context/AppContext';
+import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
 import { OrderRequest, RequestStatus, AppUser } from '../types';
 import { AdminActionModal } from './AdminActionModal';
 import { DigitalDocumentCard } from './DigitalDocumentCard';
@@ -206,9 +207,11 @@ export const AdminPanel: React.FC = () => {
       {/* Top Header */}
       <header className="sticky top-0 z-40 bg-zinc-900/90 border-b border-zinc-800 backdrop-blur-xl px-4 sm:px-8 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-2xl bg-gradient-to-tr from-rose-600 to-[#B71C1C] text-white shadow-md shadow-rose-600/30">
-            <ShieldCheck className="w-5 h-5" />
-          </div>
+          <img
+            src={OFFICIAL_DIGIZORT_LOGO}
+            alt="DIGIZORT Logo"
+            className="w-9 h-9 sm:w-10 sm:h-10 object-contain drop-shadow-[0_0_12px_rgba(225,29,72,0.4)]"
+          />
           <div>
             <h1 className="text-base sm:text-lg font-extrabold tracking-tight text-white flex items-center gap-2">
               DIGIZORT <span className="text-xs text-rose-400 font-bold uppercase">ADMIN PANEL</span>

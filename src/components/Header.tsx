@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
+import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
 import {
   LayoutDashboard,
   Receipt,
@@ -76,9 +77,11 @@ export const Header: React.FC = () => {
             className="flex items-center gap-2.5 group focus:outline-none"
             id="brand-logo-btn"
           >
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#E53935] to-[#B71C1C] flex items-center justify-center font-black text-white text-lg shadow-lg shadow-[#E53935]/20 group-hover:scale-105 transition-transform">
-              D
-            </div>
+            <img
+              src={OFFICIAL_DIGIZORT_LOGO}
+              alt="DIGIZORT Logo"
+              className="w-9 h-9 object-contain group-hover:scale-105 transition-transform drop-shadow-[0_0_12px_rgba(229,57,53,0.35)]"
+            />
             <div className="flex flex-col text-left">
               <span className="font-bold text-white text-base tracking-tight leading-none group-hover:text-[#E53935] transition-colors">
                 DIGIZORT
