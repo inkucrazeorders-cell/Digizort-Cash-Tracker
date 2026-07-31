@@ -791,7 +791,7 @@ export const AdminPanel: React.FC = () => {
               </p>
             </div>
 
-            <DigitalDocumentCard transaction={inspectDocReq} />
+            <DigitalDocumentCard transaction={inspectDocReq} showWhatsAppShare={true} />
           </div>
         </div>
       )}

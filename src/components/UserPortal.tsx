@@ -518,10 +518,10 @@ export const UserPortal: React.FC = () => {
             <div className="p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800/90 space-y-2">
               <h3 className="text-base font-extrabold text-white flex items-center gap-2">
                 <FileText className="w-5 h-5 text-[#E53935]" />
-                Official Digital Documents & Sharing
+                Official Digital Documents
               </h3>
               <p className="text-xs text-zinc-400">
-                Generate, download high-resolution PNG, printable PDF, or share official statements via WhatsApp.
+                View current status and download high-resolution PNG or printable PDF official statements.
               </p>
             </div>
 
@@ -532,7 +532,7 @@ export const UserPortal: React.FC = () => {
             ) : (
               <div className="space-y-6">
                 {userRequests.map((req) => (
-                  <DigitalDocumentCard key={req.id} transaction={req} />
+                  <DigitalDocumentCard key={req.id} transaction={req} showWhatsAppShare={false} />
                 ))}
               </div>
             )}
@@ -705,7 +705,7 @@ export const UserPortal: React.FC = () => {
               <p className="text-xs text-zinc-400">{selectedReq.purpose} • #{selectedReq.id}</p>
             </div>
 
-            <DigitalDocumentCard transaction={selectedReq} />
+            <DigitalDocumentCard transaction={selectedReq} showWhatsAppShare={false} />
           </div>
         </div>
       )}

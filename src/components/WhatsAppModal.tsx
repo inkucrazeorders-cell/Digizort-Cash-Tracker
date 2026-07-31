@@ -49,6 +49,7 @@ export const WhatsAppModal: React.FC = () => {
             <div className="p-4 sm:p-6 overflow-y-auto space-y-4">
               <DigitalDocumentCard
                 transaction={whatsAppTx}
+                showWhatsAppShare={true}
                 onClose={() => setIsWhatsAppModalOpen(false)}
                 onOpenRecordPayment={() => setIsRecordPaymentOpen(true)}
               />

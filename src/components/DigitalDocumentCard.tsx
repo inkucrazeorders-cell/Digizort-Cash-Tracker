@@ -22,12 +22,14 @@ interface DigitalDocumentCardProps {
   transaction: OrderRequest;
   onClose?: () => void;
   onOpenRecordPayment?: () => void;
+  showWhatsAppShare?: boolean;
 }
 
 export const DigitalDocumentCard: React.FC<DigitalDocumentCardProps> = ({
   transaction,
   onClose,
   onOpenRecordPayment,
+  showWhatsAppShare = false,
 }) => {
   const { settings, showToast } = useApp();
   const cardRef = useRef<HTMLDivElement>(null);
@@ -64,6 +66,78 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
     return encodeURIComponent(text);
   };
 
+  // Helper to convert any oklch/oklab/color CSS function to rgb/rgba format for html2canvas
+  const colorToRgb = (colorStr: string): string => {
+    if (!colorStr || typeof colorStr !== 'string') return colorStr;
+    if (!/(oklch|oklab|color)/i.test(colorStr)) return colorStr;
+
+    return colorStr.replace(/(oklch|oklab|color)\([^)]+\)/gi, (match) => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 1;
+        canvas.height = 1;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) return match;
+
+        ctx.clearRect(0, 0, 1, 1);
+        ctx.fillStyle = '#000000';
+        ctx.fillStyle = match;
+        ctx.fillRect(0, 0, 1, 1);
+
+        const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+        const alpha = Number((a / 255).toFixed(3));
+        return alpha === 1 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      } catch {
+        return match;
+      }
+    });
+  };
+
+  const processClonedDocForOklch = (clonedDoc: Document) => {
+    // 1. Convert all <style> elements in clonedDoc
+    const styleElements = clonedDoc.querySelectorAll('style');
+    styleElements.forEach((styleEl) => {
+      if (styleEl.textContent && /(oklch|oklab|color)/i.test(styleEl.textContent)) {
+        styleEl.textContent = colorToRgb(styleEl.textContent);
+      }
+    });
+
+    // 2. Convert inline style attributes and computed properties on all elements
+    const allElements = clonedDoc.querySelectorAll<HTMLElement>('*');
+    allElements.forEach((el) => {
+      const styleAttr = el.getAttribute('style');
+      if (styleAttr && /(oklch|oklab|color)/i.test(styleAttr)) {
+        el.setAttribute('style', colorToRgb(styleAttr));
+      }
+
+      try {
+        const computed = window.getComputedStyle(el);
+        const propsToCheck = [
+          'color',
+          'background-color',
+          'border-color',
+          'border-top-color',
+          'border-right-color',
+          'border-bottom-color',
+          'border-left-color',
+          'outline-color',
+          'box-shadow',
+          'fill',
+          'stroke',
+        ];
+
+        propsToCheck.forEach((prop) => {
+          const val = computed.getPropertyValue(prop);
+          if (val && /(oklch|oklab|color)/i.test(val)) {
+            el.style.setProperty(prop, colorToRgb(val));
+          }
+        });
+      } catch {
+        // ignore
+      }
+    });
+  };
+
   const handleShareWhatsApp = () => {
     const message = generateWhatsAppMessage();
     const url = `https://wa.me/?text=${message}`;
@@ -80,12 +154,19 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
         scale: 2,
         useCORS: true,
         backgroundColor: '#09090b',
+        logging: false,
+        onclone: (clonedDoc) => {
+          processClonedDocForOklch(clonedDoc);
+        },
       });
-      const image = canvas.toDataURL('image/png');
+      const image = canvas.toDataURL('image/png', 1.0);
       const link = document.createElement('a');
       link.href = image;
-      link.download = `DIGIZORT_${transaction.id}_${transaction.userName.replace(/\s+/g, '_')}.png`;
+      const cleanReqId = transaction.id || 'REQ-DOC';
+      link.download = `DIGIZORT_Request_${cleanReqId}.png`;
+      document.body.appendChild(link);
       link.click();
+      document.body.removeChild(link);
       showToast('PNG downloaded successfully!');
     } catch (err) {
       console.error(err);
@@ -104,8 +185,12 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
         scale: 2,
         useCORS: true,
         backgroundColor: '#09090b',
+        logging: false,
+        onclone: (clonedDoc) => {
+          processClonedDocForOklch(clonedDoc);
+        },
       });
-      const imgData = canvas.toDataURL('image/png');
+      const imgData = canvas.toDataURL('image/png', 1.0);
       
       const pdf = new jsPDF({
         orientation: 'portrait',
@@ -113,12 +198,21 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
         format: 'a4',
       });
 
-      const imgProps = pdf.getImageProperties(imgData);
-      const pdfWidth = pdf.internal.pageSize.getWidth() - 20;
-      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
 
-      pdf.addImage(imgData, 'PNG', 10, 10, pdfWidth, pdfHeight);
-      pdf.save(`DIGIZORT_${transaction.id}_${transaction.userName.replace(/\s+/g, '_')}.pdf`);
+      // Dark background for A4 sheet
+      pdf.setFillColor(9, 9, 11);
+      pdf.rect(0, 0, pdfWidth, pdfHeight, 'F');
+
+      const margin = 10;
+      const maxWidth = pdfWidth - margin * 2;
+      const imgProps = pdf.getImageProperties(imgData);
+      const calculatedHeight = (imgProps.height * maxWidth) / imgProps.width;
+
+      pdf.addImage(imgData, 'PNG', margin, margin, maxWidth, Math.min(calculatedHeight, pdfHeight - margin * 2));
+      const cleanReqId = transaction.id || 'REQ-DOC';
+      pdf.save(`DIGIZORT_Request_${cleanReqId}.pdf`);
       showToast('PDF downloaded successfully!');
     } catch (err) {
       console.error(err);
@@ -315,7 +409,7 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
       </div>
 
       {/* Control Actions Bar */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      <div className={`grid ${showWhatsAppShare ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2'} gap-2`}>
         <button
           onClick={handleDownloadPNG}
           disabled={isExporting}
@@ -336,14 +430,16 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
           <span>Download PDF</span>
         </button>
 
-        <button
-          onClick={handleShareWhatsApp}
-          className="col-span-2 sm:col-span-1 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition-all"
-          id="btn-share-whatsapp"
-        >
-          <MessageSquare className="w-3.5 h-3.5" />
-          <span>Share WhatsApp</span>
-        </button>
+        {showWhatsAppShare && (
+          <button
+            onClick={handleShareWhatsApp}
+            className="col-span-2 sm:col-span-1 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition-all"
+            id="btn-share-whatsapp"
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>Share WhatsApp</span>
+          </button>
+        )}
       </div>
     </div>
   );
