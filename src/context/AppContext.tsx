@@ -133,7 +133,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 3500);
   };
 
-  // Restore session from localStorage on app load
+  // Restore session from localStorage on app load (Admin Panel ONLY)
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_SESSION_KEY);
@@ -142,9 +142,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (session.isAdmin) {
           setIsAdmin(true);
           setAppMode('admin_panel');
-        } else if (session.user) {
-          setCurrentUser(session.user);
-          setAppMode('user_portal');
+        } else {
+          // Disable automatic login / session persistence for User Portal
+          localStorage.removeItem(STORAGE_SESSION_KEY);
         }
       }
     } catch (e) {
@@ -254,7 +254,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(newUser);
     setIsAdmin(false);
     setAppMode('user_portal');
-    localStorage.setItem(STORAGE_SESSION_KEY, JSON.stringify({ user: newUser }));
     return newUser;
   };
 
@@ -275,7 +274,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(updated);
     setIsAdmin(false);
     setAppMode('user_portal');
-    localStorage.setItem(STORAGE_SESSION_KEY, JSON.stringify({ user: updated }));
     showToast(`Welcome back, ${user.fullName}!`);
   };
 
