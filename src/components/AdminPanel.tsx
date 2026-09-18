@@ -3,6 +3,16 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../context/AppContext';
 import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
 import { OrderRequest, RequestStatus, AppUser } from '../types';
+import {
+  calculateAccountSummary,
+  isRequestRejected,
+  isRequestCancelled,
+  isRequestEligibleForPayment,
+  getRequestPrice,
+  getRequestPaid,
+  getRequestRemaining,
+  allocatePaymentAcrossRequests,
+} from '../lib/calculations';
 import { AdminActionModal } from './AdminActionModal';
 import { DigitalDocumentCard } from './DigitalDocumentCard';
 import {
@@ -29,32 +39,56 @@ import {
   X,
   BarChart3,
   Calendar,
+  CreditCard,
+  Ban,
+  CheckSquare,
+  Square,
+  ArrowRight,
+  Coins,
+  Receipt,
+  Eye,
 } from 'lucide-react';
 
 export const AdminPanel: React.FC = () => {
   const {
     allRequests,
     allUsers,
+    groupPayments,
     settings,
     logoutUser,
     adminSuspendUser,
     adminUnsuspendUser,
     adminDeleteUser,
+    adminProcessGroupPayment,
     showToast,
   } = useApp();
 
-  const [adminTab, setAdminTab] = useState<'dashboard' | 'requests' | 'users' | 'reports'>('dashboard');
+  const [adminTab, setAdminTab] = useState<
+    'dashboard' | 'requests' | 'group_payment' | 'rejected' | 'users' | 'reports'
+  >('dashboard');
 
   // Action Modal State
   const [selectedReq, setSelectedReq] = useState<OrderRequest | null>(null);
-  const [modalAction, setModalAction] = useState<'accept' | 'reject' | 'status' | 'payment' | null>(null);
+  const [modalAction, setModalAction] = useState<
+    'accept' | 'reject' | 'status' | 'payment' | 'delete' | null
+  >(null);
+
+  // Group Payment State
+  const [selectedGroupUserId, setSelectedGroupUserId] = useState<string>('');
+  const [selectedGroupReqIds, setSelectedGroupReqIds] = useState<string[]>([]);
+  const [groupCashReceivedInput, setGroupCashReceivedInput] = useState<string>('');
+  const [groupPaymentNote, setGroupPaymentNote] = useState<string>('');
+  const [isProcessingGroupPayment, setIsProcessingGroupPayment] = useState<boolean>(false);
 
   // Document Card Inspection Modal
   const [inspectDocReq, setInspectDocReq] = useState<OrderRequest | null>(null);
 
-  // Filters for Requests
+  // Filters for Active Requests
   const [reqSearch, setReqSearch] = useState('');
   const [reqStatusFilter, setReqStatusFilter] = useState<string>('All');
+
+  // Filters for Rejected Requests
+  const [rejectedSearch, setRejectedSearch] = useState('');
 
   // Filters for Users
   const [userSearch, setUserSearch] = useState('');
@@ -63,46 +97,50 @@ export const AdminPanel: React.FC = () => {
   // Selected User detail modal
   const [selectedUserDetail, setSelectedUserDetail] = useState<AppUser | null>(null);
 
-  // Stats calculation
+  // Active (non-rejected) vs Rejected requests
+  const activeRequests = allRequests.filter((r) => !isRequestRejected(r));
+  const rejectedRequests = allRequests.filter((r) => isRequestRejected(r));
+
+  // Stats calculation via calculations.ts (strictly separates rejected requests)
+  const statsSummary = calculateAccountSummary(allRequests, groupPayments);
+
   const todayStr = new Date().toISOString().slice(0, 10);
-  const todayRequestsCount = allRequests.filter(
+  const todayRequestsCount = activeRequests.filter(
     (r) => r.createdAt && r.createdAt.slice(0, 10) === todayStr
   ).length;
 
-  const pendingRequestsCount = allRequests.filter(
-    (r) => r.status === 'Pending Review' || r.status === 'Accepted' || r.status === 'Processing' || r.status === 'Ordered'
+  const pendingRequestsCount = activeRequests.filter(
+    (r) =>
+      r.status === 'Pending Review' ||
+      r.status === 'Accepted' ||
+      r.status === 'Processing' ||
+      r.status === 'Ordered' ||
+      r.status === 'Waiting For Payment' ||
+      r.status === 'Partially Paid'
   ).length;
 
-  const completedRequestsCount = allRequests.filter(
-    (r) => r.status === 'Completed' || r.status === 'Paid'
-  ).length;
+  const completedRequestsCount = statsSummary.completedRequests;
+  const pendingPaymentsCount = activeRequests.filter((r) => getRequestRemaining(r) > 0).length;
 
-  const pendingPaymentsCount = allRequests.filter(
-    (r) => r.status === 'Waiting For Payment' || r.status === 'Partially Paid'
-  ).length;
+  const totalCollected = statsSummary.totalPaid;
+  const totalPending = statsSummary.totalPending;
+  const totalExtraCash = statsSummary.totalExtraCash;
 
-  const totalCollected = allRequests.reduce((sum, r) => {
-    const actual = r.actualPrice || r.expectedPrice || 0;
-    return sum + (r.amountPaid || (r.status === 'Paid' ? actual : 0));
-  }, 0);
-
-  const totalPending = allRequests.reduce((sum, r) => {
-    const actual = r.actualPrice || r.expectedPrice || 0;
-    const paid = r.amountPaid || (r.status === 'Paid' ? actual : 0);
-    return sum + (r.remainingAmount ?? (r.status === 'Paid' ? 0 : Math.max(0, actual - paid)));
-  }, 0);
-
-  // Monthly Revenue Calculation
+  // Monthly Revenue Calculation (strictly non-rejected)
   const currentMonthStr = new Date().toISOString().slice(0, 7);
-  const monthlyRevenue = allRequests
+  const monthlyRevenue = activeRequests
     .filter((r) => r.createdAt && r.createdAt.slice(0, 7) === currentMonthStr)
-    .reduce((sum, r) => {
-      const actual = r.actualPrice || r.expectedPrice || 0;
-      return sum + (r.amountPaid || (r.status === 'Paid' ? actual : 0));
-    }, 0);
+    .reduce((sum, r) => sum + getRequestPaid(r), 0);
 
-  // Filtered Requests
+  // Filtered Active Requests (strictly separates rejected requests)
   const filteredRequests = allRequests.filter((r) => {
+    // If status filter is 'All', strictly exclude rejected requests
+    if (reqStatusFilter === 'All') {
+      if (isRequestRejected(r)) return false;
+    } else if (r.status !== reqStatusFilter) {
+      return false;
+    }
+
     if (reqSearch) {
       const q = reqSearch.toLowerCase();
       const matchesName = r.productName.toLowerCase().includes(q);
@@ -111,7 +149,20 @@ export const AdminPanel: React.FC = () => {
       const matchesId = r.id.toLowerCase().includes(q);
       if (!matchesName && !matchesUser && !matchesMobile && !matchesId) return false;
     }
-    if (reqStatusFilter !== 'All' && r.status !== reqStatusFilter) return false;
+    return true;
+  });
+
+  // Filtered Rejected Requests for the dedicated Rejected Requests tab
+  const filteredRejectedRequests = rejectedRequests.filter((r) => {
+    if (rejectedSearch) {
+      const q = rejectedSearch.toLowerCase();
+      const matchesName = r.productName.toLowerCase().includes(q);
+      const matchesUser = r.userName.toLowerCase().includes(q);
+      const matchesMobile = r.userMobile.includes(q);
+      const matchesId = r.id.toLowerCase().includes(q);
+      const matchesReason = (r.rejectionNote || r.adminNotes || '').toLowerCase().includes(q);
+      if (!matchesName && !matchesUser && !matchesMobile && !matchesId && !matchesReason) return false;
+    }
     return true;
   });
 
@@ -238,7 +289,7 @@ export const AdminPanel: React.FC = () => {
         <div className="flex items-center gap-1.5 p-1.5 rounded-2xl bg-zinc-900 border border-zinc-800 overflow-x-auto">
           <button
             onClick={() => setAdminTab('dashboard')}
-            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
               adminTab === 'dashboard'
                 ? 'bg-rose-600 text-white shadow-md'
                 : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
@@ -251,7 +302,7 @@ export const AdminPanel: React.FC = () => {
 
           <button
             onClick={() => setAdminTab('requests')}
-            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
               adminTab === 'requests'
                 ? 'bg-rose-600 text-white shadow-md'
                 : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
@@ -259,12 +310,38 @@ export const AdminPanel: React.FC = () => {
             id="admin-tab-requests"
           >
             <ShoppingBag className="w-4 h-4" />
-            <span>All Requests ({allRequests.length})</span>
+            <span>Active Requests ({activeRequests.length})</span>
+          </button>
+
+          <button
+            onClick={() => setAdminTab('group_payment')}
+            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
+              adminTab === 'group_payment'
+                ? 'bg-rose-600 text-white shadow-md'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+            }`}
+            id="admin-tab-group-payment"
+          >
+            <CreditCard className="w-4 h-4" />
+            <span>Payment Grouping</span>
+          </button>
+
+          <button
+            onClick={() => setAdminTab('rejected')}
+            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
+              adminTab === 'rejected'
+                ? 'bg-rose-600 text-white shadow-md'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+            }`}
+            id="admin-tab-rejected"
+          >
+            <Ban className="w-4 h-4 text-rose-400" />
+            <span>Rejected Requests ({rejectedRequests.length})</span>
           </button>
 
           <button
             onClick={() => setAdminTab('users')}
-            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
               adminTab === 'users'
                 ? 'bg-rose-600 text-white shadow-md'
                 : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
@@ -277,7 +354,7 @@ export const AdminPanel: React.FC = () => {
 
           <button
             onClick={() => setAdminTab('reports')}
-            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
               adminTab === 'reports'
                 ? 'bg-rose-600 text-white shadow-md'
                 : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
@@ -320,7 +397,7 @@ export const AdminPanel: React.FC = () => {
             </div>
 
             {/* Financial Overview Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="p-6 rounded-3xl bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-zinc-400 uppercase">Total Collected</span>
@@ -347,6 +424,20 @@ export const AdminPanel: React.FC = () => {
                   {totalPending.toLocaleString('en-IN')}
                 </span>
                 <p className="text-[11px] text-zinc-500">Outstanding balances owed by customers</p>
+              </div>
+
+              <div className="p-6 rounded-3xl bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-zinc-400 uppercase">Extra Cash Received</span>
+                  <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400">
+                    <Coins className="w-4 h-4" />
+                  </div>
+                </div>
+                <span className="text-3xl font-extrabold text-amber-400 block">
+                  {settings.currencySymbol}
+                  {totalExtraCash.toLocaleString('en-IN')}
+                </span>
+                <p className="text-[11px] text-zinc-500">Overpayments / extra cash recorded</p>
               </div>
 
               <div className="p-6 rounded-3xl bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 space-y-2">
@@ -456,9 +547,9 @@ export const AdminPanel: React.FC = () => {
             ) : (
               <div className="space-y-3">
                 {filteredRequests.map((req) => {
-                  const actual = req.actualPrice || req.expectedPrice || 0;
-                  const paid = req.amountPaid || (req.status === 'Paid' ? actual : 0);
-                  const rem = req.remainingAmount ?? (req.status === 'Paid' ? 0 : Math.max(0, actual - paid));
+                  const actual = getRequestPrice(req);
+                  const paid = getRequestPaid(req);
+                  const rem = getRequestRemaining(req);
 
                   return (
                     <motion.div
@@ -475,6 +566,11 @@ export const AdminPanel: React.FC = () => {
                             {req.userName} ({req.userMobile})
                           </span>
                           {getStatusBadge(req.status)}
+                          {req.extraCash && req.extraCash > 0 ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                              Extra Cash: {settings.currencySymbol}{req.extraCash.toLocaleString('en-IN')}
+                            </span>
+                          ) : null}
                         </div>
 
                         <p className="text-xs text-zinc-300">{req.purpose}</p>
@@ -504,9 +600,13 @@ export const AdminPanel: React.FC = () => {
                           <span className="text-emerald-400 font-extrabold block">
                             Paid: {settings.currencySymbol}{paid.toLocaleString('en-IN')}
                           </span>
-                          {rem > 0 && (
+                          {rem > 0 ? (
                             <span className="text-rose-400 font-bold block">
                               Balance: {settings.currencySymbol}{rem.toLocaleString('en-IN')}
+                            </span>
+                          ) : (
+                            <span className="text-emerald-400 text-[10px] font-bold block">
+                              Fully Settled
                             </span>
                           )}
                         </div>
@@ -559,11 +659,594 @@ export const AdminPanel: React.FC = () => {
                           )}
 
                           <button
+                            onClick={() => {
+                              setSelectedReq(req);
+                              setModalAction('delete');
+                            }}
+                            className="py-2 px-3 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 font-bold text-xs rounded-xl transition-all flex items-center gap-1"
+                            title="Delete Request"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete</span>
+                          </button>
+
+                          <button
                             onClick={() => setInspectDocReq(req)}
                             className="py-2 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white font-bold text-xs rounded-xl transition-colors flex items-center gap-1"
                             title="View Document & Share"
                           >
                             <FileText className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB: PAYMENT GROUPING (BATCH SETTLEMENT) */}
+        {adminTab === 'group_payment' && (() => {
+          // Identify customers with unpaid, active requests
+          const eligibleReqs = activeRequests.filter((r) => isRequestEligibleForPayment(r));
+          const usersWithDue = allUsers.filter((u) =>
+            eligibleReqs.some((r) => r.userMobile === u.mobileNumber || r.userId === u.id)
+          );
+
+          const currentCustomer = allUsers.find(
+            (u) => u.id === selectedGroupUserId || u.mobileNumber === selectedGroupUserId
+          );
+
+          const customerUnpaidReqs = currentCustomer
+            ? eligibleReqs.filter(
+                (r) => r.userMobile === currentCustomer.mobileNumber || r.userId === currentCustomer.id
+              )
+            : [];
+
+          const selectedReqsList = customerUnpaidReqs.filter((r) =>
+            selectedGroupReqIds.includes(r.id)
+          );
+
+          const totalDueForSelected = selectedReqsList.reduce(
+            (sum, r) => sum + getRequestRemaining(r),
+            0
+          );
+
+          const cashReceivedNum = parseFloat(groupCashReceivedInput) || 0;
+          const allocation = allocatePaymentAcrossRequests(selectedReqsList, cashReceivedNum);
+
+          const handleToggleReq = (id: string) => {
+            if (selectedGroupReqIds.includes(id)) {
+              setSelectedGroupReqIds(selectedGroupReqIds.filter((x) => x !== id));
+            } else {
+              setSelectedGroupReqIds([...selectedGroupReqIds, id]);
+            }
+          };
+
+          const handleSelectAll = () => {
+            setSelectedGroupReqIds(customerUnpaidReqs.map((r) => r.id));
+          };
+
+          const handleDeselectAll = () => {
+            setSelectedGroupReqIds([]);
+          };
+
+          const handleExecuteGroupPayment = async () => {
+            if (!currentCustomer) {
+              showToast('Please select a customer.');
+              return;
+            }
+            if (selectedGroupReqIds.length === 0) {
+              showToast('Please select at least one request to settle.');
+              return;
+            }
+            if (cashReceivedNum <= 0) {
+              showToast('Please enter a valid cash amount received.');
+              return;
+            }
+
+            try {
+              setIsProcessingGroupPayment(true);
+              const gpId = await adminProcessGroupPayment(
+                selectedGroupReqIds,
+                cashReceivedNum,
+                groupPaymentNote
+              );
+              showToast(`Group Payment #${gpId} processed successfully!`);
+              setSelectedGroupReqIds([]);
+              setGroupCashReceivedInput('');
+              setGroupPaymentNote('');
+            } catch (err: any) {
+              showToast(`Failed to process group payment: ${err.message || 'Unknown error'}`);
+            } finally {
+              setIsProcessingGroupPayment(false);
+            }
+          };
+
+          return (
+            <div className="space-y-6">
+              {/* Header Box */}
+              <div className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-2">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-2xl bg-rose-600/20 text-rose-400 border border-rose-500/30">
+                    <CreditCard className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-extrabold text-white">
+                      Payment Grouping & Batch Settlement
+                    </h3>
+                    <p className="text-xs text-zinc-400">
+                      Settle multiple unpaid requests for the same customer in a single transaction with automated allocation and extra cash tracking.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 1: Select Customer */}
+              <div className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider flex items-center gap-2">
+                    <Users className="w-4 h-4 text-rose-400" />
+                    <span>Select Customer with Unpaid Balances</span>
+                  </label>
+                  <span className="text-xs text-zinc-500">
+                    {usersWithDue.length} customer(s) have pending balances
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {usersWithDue.length === 0 ? (
+                    <div className="col-span-full p-8 text-center bg-zinc-950 border border-zinc-800/80 rounded-2xl text-xs text-zinc-500">
+                      All customer requests are currently fully settled! No pending dues.
+                    </div>
+                  ) : (
+                    usersWithDue.map((u) => {
+                      const uUnpaid = eligibleReqs.filter(
+                        (r) => r.userMobile === u.mobileNumber || r.userId === u.id
+                      );
+                      const uDue = uUnpaid.reduce((sum, r) => sum + getRequestRemaining(r), 0);
+                      const isSelected =
+                        selectedGroupUserId === u.id || selectedGroupUserId === u.mobileNumber;
+
+                      return (
+                        <button
+                          key={u.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedGroupUserId(u.id);
+                            // Auto select all requests for this customer initially
+                            setSelectedGroupReqIds(uUnpaid.map((r) => r.id));
+                          }}
+                          className={`p-4 rounded-2xl border text-left transition-all flex items-center justify-between ${
+                            isSelected
+                              ? 'bg-rose-600/10 border-rose-500 text-white ring-1 ring-rose-500'
+                              : 'bg-zinc-950 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                          }`}
+                        >
+                          <div>
+                            <p className="font-extrabold text-sm text-white">{u.fullName}</p>
+                            <p className="text-xs text-rose-400 font-bold">{u.mobileNumber}</p>
+                            <span className="text-[11px] text-zinc-400">
+                              {uUnpaid.length} unpaid request{uUnpaid.length > 1 ? 's' : ''}
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-xs text-zinc-400 block">Total Due</span>
+                            <span className="text-sm font-extrabold text-rose-400 block">
+                              {settings.currencySymbol}{uDue.toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              {/* Step 2: Select Requests to Settle (if customer selected) */}
+              {currentCustomer && (
+                <div className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800 pb-4">
+                    <div>
+                      <h4 className="text-sm font-extrabold text-white">
+                        Select Requests for {currentCustomer.fullName}
+                      </h4>
+                      <p className="text-xs text-zinc-400">
+                        Choose which requests to include in this settlement batch.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSelectAll}
+                        className="py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-zinc-300 rounded-xl transition-colors"
+                      >
+                        Select All ({customerUnpaidReqs.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeselectAll}
+                        className="py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-zinc-300 rounded-xl transition-colors"
+                      >
+                        Clear Selection
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Requests Selection List */}
+                  <div className="space-y-2.5">
+                    {customerUnpaidReqs.map((req) => {
+                      const rem = getRequestRemaining(req);
+                      const isChecked = selectedGroupReqIds.includes(req.id);
+
+                      return (
+                        <div
+                          key={req.id}
+                          onClick={() => handleToggleReq(req.id)}
+                          className={`p-4 rounded-2xl border cursor-pointer transition-all flex items-center justify-between gap-4 ${
+                            isChecked
+                              ? 'bg-rose-950/20 border-rose-500/50 text-white'
+                              : 'bg-zinc-950 border-zinc-800/80 text-zinc-400 hover:border-zinc-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="p-1 text-rose-500">
+                              {isChecked ? (
+                                <CheckSquare className="w-5 h-5 text-rose-500" />
+                              ) : (
+                                <Square className="w-5 h-5 text-zinc-600" />
+                              )}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-extrabold text-white text-sm">
+                                  {req.productName}
+                                </span>
+                                <span className="text-[10px] text-zinc-500 font-medium">
+                                  #{req.id}
+                                </span>
+                                {getStatusBadge(req.status)}
+                              </div>
+                              <p className="text-xs text-zinc-400 mt-0.5">{req.purpose}</p>
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <span className="text-[11px] text-zinc-400 block">Current Due</span>
+                            <span className="text-sm font-extrabold text-rose-400 block">
+                              {settings.currencySymbol}{rem.toLocaleString('en-IN')}
+                            </span>
+                            <span className="text-[10px] text-zinc-500 block">
+                              Price: {settings.currencySymbol}{getRequestPrice(req).toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Batch Settlement Form */}
+                  {selectedGroupReqIds.length > 0 && (
+                    <div className="pt-4 border-t border-zinc-800 space-y-4">
+                      <div className="p-5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
+                          <div className="p-3 rounded-xl bg-zinc-900 border border-zinc-800/80">
+                            <span className="text-[10px] font-bold text-zinc-500 uppercase block">
+                              Selected Requests
+                            </span>
+                            <span className="text-2xl font-extrabold text-white block">
+                              {selectedGroupReqIds.length}
+                            </span>
+                          </div>
+
+                          <div className="p-3 rounded-xl bg-zinc-900 border border-zinc-800/80">
+                            <span className="text-[10px] font-bold text-zinc-500 uppercase block">
+                              Total Amount Due
+                            </span>
+                            <span className="text-2xl font-extrabold text-rose-400 block">
+                              {settings.currencySymbol}{totalDueForSelected.toLocaleString('en-IN')}
+                            </span>
+                          </div>
+
+                          <div className="p-3 rounded-xl bg-zinc-900 border border-zinc-800/80">
+                            <span className="text-[10px] font-bold text-zinc-500 uppercase block">
+                              Extra Cash (Change / Credit)
+                            </span>
+                            <span className="text-2xl font-extrabold text-amber-400 block">
+                              {settings.currencySymbol}{allocation.extraCash.toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Cash Input */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-bold text-zinc-300">
+                            Cash Received from Customer ({settings.currencySymbol}) *
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 font-bold">
+                              {settings.currencySymbol}
+                            </span>
+                            <input
+                              type="number"
+                              min="1"
+                              step="any"
+                              placeholder={`Enter amount e.g. ${totalDueForSelected}`}
+                              value={groupCashReceivedInput}
+                              onChange={(e) => setGroupCashReceivedInput(e.target.value)}
+                              className="w-full pl-8 pr-4 py-3 bg-zinc-900 border border-zinc-700 rounded-xl text-base font-extrabold text-white focus:outline-none focus:border-rose-500"
+                              id="input-admin-group-cash"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Payment Notes */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-bold text-zinc-300">
+                            Payment Notes / Reference (Optional)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Counter Cash, GPay/PhonePe Ref, Settled in person..."
+                            value={groupPaymentNote}
+                            onChange={(e) => setGroupPaymentNote(e.target.value)}
+                            className="w-full px-4 py-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-xs text-white focus:outline-none focus:border-rose-500"
+                            id="input-admin-group-note"
+                          />
+                        </div>
+
+                        {/* Allocation Preview Breakdown */}
+                        {cashReceivedNum > 0 && (
+                          <div className="p-4 rounded-xl bg-zinc-900/90 border border-zinc-800 space-y-3">
+                            <h5 className="text-xs font-bold text-zinc-300 uppercase tracking-wider">
+                              Allocation Preview
+                            </h5>
+
+                            <div className="space-y-1.5 text-xs">
+                              {allocation.requestAllocations.map((alloc) => {
+                                const reqObj = selectedReqsList.find((r) => r.id === alloc.requestId);
+                                return (
+                                  <div
+                                    key={alloc.requestId}
+                                    className="flex items-center justify-between py-1.5 border-b border-zinc-800/60 last:border-0"
+                                  >
+                                    <div>
+                                      <span className="font-bold text-white block">
+                                        {reqObj?.productName || `Request #${alloc.requestId}`}
+                                      </span>
+                                      <span className="text-[10px] text-zinc-500">
+                                        Prev Paid: {settings.currencySymbol}{alloc.previousPaid}
+                                      </span>
+                                    </div>
+                                    <div className="text-right">
+                                      <span className="text-emerald-400 font-bold block">
+                                        +{settings.currencySymbol}{alloc.allocatedPayment}
+                                      </span>
+                                      <span
+                                        className={`text-[10px] font-bold ${
+                                          alloc.newStatus === 'Paid'
+                                            ? 'text-emerald-400'
+                                            : 'text-amber-400'
+                                        }`}
+                                      >
+                                        ➔ {alloc.newStatus} (Rem: {settings.currencySymbol}{alloc.newRemaining})
+                                      </span>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+
+                            {allocation.extraCash > 0 && (
+                              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs">
+                                <span className="text-amber-300 font-bold flex items-center gap-1.5">
+                                  <Coins className="w-4 h-4 text-amber-400" />
+                                  Extra Cash to return / credit:
+                                </span>
+                                <span className="text-amber-400 font-extrabold text-sm">
+                                  {settings.currencySymbol}{allocation.extraCash.toLocaleString('en-IN')}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Action Button */}
+                        <button
+                          type="button"
+                          disabled={isProcessingGroupPayment || cashReceivedNum <= 0}
+                          onClick={handleExecuteGroupPayment}
+                          className="w-full py-3.5 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 disabled:opacity-50 text-white font-extrabold text-sm rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
+                          id="btn-confirm-group-payment"
+                        >
+                          <CheckCircle2 className="w-5 h-5" />
+                          <span>
+                            {isProcessingGroupPayment
+                              ? 'Processing Atomic Group Settlement...'
+                              : `Settle ${selectedGroupReqIds.length} Request(s) (${settings.currencySymbol}${allocation.amountSettled.toLocaleString('en-IN')})`}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Past Group Payments History */}
+              <div className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-extrabold text-white flex items-center gap-2">
+                    <Receipt className="w-4 h-4 text-rose-500" />
+                    <span>Group Payments History ({groupPayments.length})</span>
+                  </h4>
+                  <span className="text-xs text-zinc-500">Atomic batch settlement records</span>
+                </div>
+
+                {groupPayments.length === 0 ? (
+                  <p className="text-xs text-zinc-500 p-6 text-center bg-zinc-950 rounded-2xl border border-zinc-800">
+                    No group payments recorded yet.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {groupPayments.map((gp) => (
+                      <div
+                        key={gp.id}
+                        className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2 text-xs"
+                      >
+                        <div className="flex items-start justify-between flex-wrap gap-2">
+                          <div>
+                            <span className="font-extrabold text-white text-sm">
+                              Group Settlement #{gp.id}
+                            </span>
+                            <p className="text-xs text-rose-400 font-bold">
+                              {gp.userName} ({gp.userMobile})
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-emerald-400 font-extrabold text-sm block">
+                              Settled: {settings.currencySymbol}{gp.amountSettled.toLocaleString('en-IN')}
+                            </span>
+                            <span className="text-[11px] text-zinc-400 block">
+                              Received: {settings.currencySymbol}{gp.cashReceived.toLocaleString('en-IN')}
+                            </span>
+                            {gp.extraCash > 0 && (
+                              <span className="text-amber-400 font-bold text-[11px] block">
+                                Extra Cash: {settings.currencySymbol}{gp.extraCash.toLocaleString('en-IN')}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800/80 text-[11px] text-zinc-400 flex items-center justify-between flex-wrap gap-2">
+                          <span>Settled Requests: {gp.requestIds.length}</span>
+                          <span>Admin: {gp.adminSignature}</span>
+                          <span>{new Date(gp.createdAt).toLocaleString('en-IN')}</span>
+                          {gp.notes && <span>Notes: {gp.notes}</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* TAB: REJECTED REQUESTS (COMPLETE SEPARATION) */}
+        {adminTab === 'rejected' && (
+          <div className="space-y-4">
+            {/* Search Box */}
+            <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between p-4 rounded-2xl bg-zinc-900 border border-zinc-800">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Search rejected requests by customer, mobile, product, ID, or rejection reason..."
+                  value={rejectedSearch}
+                  onChange={(e) => setRejectedSearch(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-rose-500"
+                  id="input-admin-search-rejected"
+                />
+              </div>
+              <div className="text-xs text-zinc-400 font-bold px-2">
+                Total Rejected: <span className="text-rose-400 font-extrabold">{rejectedRequests.length}</span>
+              </div>
+            </div>
+
+            {filteredRejectedRequests.length === 0 ? (
+              <div className="p-12 text-center bg-zinc-900/60 border border-zinc-800 rounded-3xl space-y-2">
+                <Ban className="w-12 h-12 text-zinc-600 mx-auto" />
+                <h4 className="text-sm font-bold text-zinc-300">No rejected requests</h4>
+                <p className="text-xs text-zinc-500">
+                  {rejectedRequests.length === 0
+                    ? 'There are currently no rejected requests in the system.'
+                    : 'No rejected requests match your search criteria.'}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {filteredRejectedRequests.map((req) => {
+                  const actual = getRequestPrice(req);
+                  return (
+                    <motion.div
+                      key={req.id}
+                      layout
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-5 rounded-3xl bg-zinc-900 border border-rose-900/30 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                    >
+                      <div className="space-y-2 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-extrabold text-white text-sm">{req.productName}</span>
+                          <span className="text-xs font-bold text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded-md">
+                            {req.userName} ({req.userMobile})
+                          </span>
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-rose-500/20 text-rose-400 border border-rose-500/40 flex items-center gap-1">
+                            <Ban className="w-3 h-3" />
+                            REJECTED
+                          </span>
+                        </div>
+
+                        <p className="text-xs text-zinc-300">{req.purpose}</p>
+
+                        {/* Rejection Details Box */}
+                        <div className="p-3 rounded-xl bg-zinc-950/80 border border-rose-900/40 text-xs space-y-1">
+                          <div className="flex items-center gap-2 text-rose-300 font-bold">
+                            <span>Reason for Rejection:</span>
+                            <span className="text-white font-normal">
+                              {req.rejectionNote || req.adminNotes || 'Request rejected by admin.'}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-4 text-[11px] text-zinc-400">
+                            <span>
+                              Date & Time:{' '}
+                              {req.rejectedAt
+                                ? new Date(req.rejectedAt).toLocaleString('en-IN')
+                                : new Date(req.updatedAt || req.createdAt).toLocaleString('en-IN')}
+                            </span>
+                            {req.rejectedBy && <span>Rejected By: {req.rejectedBy}</span>}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 text-[11px] text-zinc-500 font-medium">
+                          <span>Submitted: {new Date(req.createdAt).toLocaleDateString('en-IN')}</span>
+                          <span>•</span>
+                          <span>Request ID: #{req.id}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 border-t lg:border-t-0 pt-3 lg:pt-0 border-zinc-800">
+                        <div className="text-left sm:text-right text-xs">
+                          <span className="text-zinc-400 block font-bold">
+                            Price: {settings.currencySymbol}{actual.toLocaleString('en-IN')}
+                          </span>
+                          <span className="text-zinc-500 text-[11px] block">
+                            Excluded from balance
+                          </span>
+                        </div>
+
+                        {/* Options: DELETE REQUEST & VIEW DETAILS */}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            onClick={() => {
+                              setSelectedReq(req);
+                              setModalAction('delete');
+                            }}
+                            className="py-2 px-3.5 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/40 font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-sm"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete Request</span>
+                          </button>
+
+                          <button
+                            onClick={() => setInspectDocReq(req)}
+                            className="py-2 px-3.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white font-bold text-xs rounded-xl transition-colors flex items-center gap-1.5"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>View Details</span>
                           </button>
                         </div>
                       </div>
@@ -615,13 +1298,10 @@ export const AdminPanel: React.FC = () => {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredUsers.map((usr) => {
-                  const reqs = allRequests.filter((r) => r.userMobile === usr.mobileNumber);
-                  const totalSpent = reqs.reduce((sum, r) => sum + (r.amountPaid || 0), 0);
-                  const pendingBal = reqs.reduce((sum, r) => {
-                    const actual = r.actualPrice || r.expectedPrice || 0;
-                    const paid = r.amountPaid || (r.status === 'Paid' ? actual : 0);
-                    return sum + (r.remainingAmount ?? (r.status === 'Paid' ? 0 : Math.max(0, actual - paid)));
-                  }, 0);
+                  const userReqs = allRequests.filter(
+                    (r) => r.userMobile === usr.mobileNumber || r.userId === usr.id
+                  );
+                  const userSummary = calculateAccountSummary(userReqs);
 
                   return (
                     <div
@@ -653,16 +1333,27 @@ export const AdminPanel: React.FC = () => {
 
                         <div className="p-3 rounded-2xl bg-zinc-950 border border-zinc-800/80 grid grid-cols-2 gap-2 text-center text-xs">
                           <div>
-                            <span className="text-[10px] text-zinc-500 font-bold block">Requests</span>
-                            <span className="font-extrabold text-white block">{reqs.length}</span>
+                            <span className="text-[10px] text-zinc-500 font-bold block">Active Requests</span>
+                            <span className="font-extrabold text-white block">
+                              {userSummary.activeRequests}
+                            </span>
                           </div>
                           <div>
                             <span className="text-[10px] text-zinc-500 font-bold block">Pending Due</span>
                             <span className="font-extrabold text-rose-400 block">
-                              {settings.currencySymbol}{pendingBal.toLocaleString('en-IN')}
+                              {settings.currencySymbol}{userSummary.outstandingBalance.toLocaleString('en-IN')}
                             </span>
                           </div>
                         </div>
+
+                        {userSummary.totalExtraCash > 0 && (
+                          <div className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-[11px]">
+                            <span className="text-amber-400 font-bold">Extra Cash:</span>
+                            <span className="text-amber-300 font-extrabold">
+                              {settings.currencySymbol}{userSummary.totalExtraCash.toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                        )}
 
                         {usr.email && (
                           <p className="text-[11px] text-zinc-400">Email: {usr.email}</p>
@@ -739,17 +1430,23 @@ export const AdminPanel: React.FC = () => {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="p-5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
-                <span className="text-[10px] font-bold text-zinc-500 uppercase block">Total System Requests</span>
-                <span className="text-2xl font-extrabold text-white block">{allRequests.length}</span>
-                <p className="text-[11px] text-zinc-400">Registered across all customers</p>
+                <span className="text-[10px] font-bold text-zinc-500 uppercase block">Active Requests</span>
+                <span className="text-2xl font-extrabold text-white block">{activeRequests.length}</span>
+                <p className="text-[11px] text-zinc-400">Excludes rejected items</p>
               </div>
 
               <div className="p-5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
-                <span className="text-[10px] font-bold text-zinc-500 uppercase block">Total Users</span>
+                <span className="text-[10px] font-bold text-zinc-500 uppercase block">Rejected Requests</span>
+                <span className="text-2xl font-extrabold text-rose-400 block">{rejectedRequests.length}</span>
+                <p className="text-[11px] text-zinc-400">Completely isolated</p>
+              </div>
+
+              <div className="p-5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase block">Total Customers</span>
                 <span className="text-2xl font-extrabold text-white block">{allUsers.length}</span>
-                <p className="text-[11px] text-zinc-400">Registered mobile identity users</p>
+                <p className="text-[11px] text-zinc-400">Registered user accounts</p>
               </div>
 
               <div className="p-5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2">
@@ -800,58 +1497,232 @@ export const AdminPanel: React.FC = () => {
       )}
 
       {/* Selected User Detail Modal */}
-      {selectedUserDetail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-zinc-950/80 backdrop-blur-md overflow-y-auto">
-          <div className="w-full max-w-2xl bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-5 shadow-2xl relative max-h-[90vh] overflow-y-auto">
-            <button
-              onClick={() => setSelectedUserDetail(null)}
-              className="absolute top-5 right-5 p-2 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
+      {selectedUserDetail && (() => {
+        const userAllReqs = allRequests.filter(
+          (r) => r.userMobile === selectedUserDetail.mobileNumber || r.userId === selectedUserDetail.id
+        );
+        const userSummary = calculateAccountSummary(userAllReqs);
 
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-rose-600 to-[#B71C1C] text-white font-extrabold text-xl flex items-center justify-center">
-                {selectedUserDetail.fullName.charAt(0).toUpperCase()}
-              </div>
-              <div>
-                <h3 className="text-lg font-extrabold text-white">{selectedUserDetail.fullName}</h3>
-                <p className="text-xs text-rose-400 font-bold">{selectedUserDetail.mobileNumber}</p>
-              </div>
-            </div>
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-zinc-950/85 backdrop-blur-md overflow-y-auto">
+            <div className="w-full max-w-3xl bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+              <button
+                onClick={() => setSelectedUserDetail(null)}
+                className="absolute top-5 right-5 p-2 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
 
-            {/* Request History for this user */}
-            <div className="space-y-3">
-              <h4 className="text-xs font-bold uppercase text-zinc-400">
-                User Order & Request History
-              </h4>
-
-              {allRequests.filter((r) => r.userMobile === selectedUserDetail.mobileNumber).length === 0 ? (
-                <p className="text-xs text-zinc-500">No requests submitted by this user.</p>
-              ) : (
-                <div className="space-y-2">
-                  {allRequests
-                    .filter((r) => r.userMobile === selectedUserDetail.mobileNumber)
-                    .map((r) => (
-                      <div key={r.id} className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 text-xs flex justify-between items-center">
-                        <div>
-                          <p className="font-bold text-white">{r.productName}</p>
-                          <p className="text-[10px] text-zinc-400">{r.purpose}</p>
-                        </div>
-                        <div className="text-right">
-                          <span className="font-extrabold text-rose-400">
-                            {settings.currencySymbol}{(r.actualPrice || r.expectedPrice || 0).toLocaleString('en-IN')}
-                          </span>
-                          <span className="block text-[10px] text-zinc-500">{r.status}</span>
-                        </div>
-                      </div>
-                    ))}
+              {/* User Header */}
+              <div className="flex items-center justify-between flex-wrap gap-4 border-b border-zinc-800 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-rose-600 to-[#B71C1C] text-white font-extrabold text-xl flex items-center justify-center">
+                    {selectedUserDetail.fullName.charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-extrabold text-white">{selectedUserDetail.fullName}</h3>
+                    <p className="text-xs text-rose-400 font-bold">{selectedUserDetail.mobileNumber}</p>
+                    {selectedUserDetail.email && (
+                      <p className="text-[11px] text-zinc-400">{selectedUserDetail.email}</p>
+                    )}
+                  </div>
                 </div>
-              )}
+
+                {userSummary.outstandingBalance > 0 && (
+                  <button
+                    onClick={() => {
+                      const uid = selectedUserDetail.id;
+                      setSelectedUserDetail(null);
+                      setSelectedGroupUserId(uid);
+                      setAdminTab('group_payment');
+                    }}
+                    className="py-2 px-3.5 bg-gradient-to-r from-rose-600 to-[#B71C1C] hover:brightness-110 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all"
+                  >
+                    <CreditCard className="w-3.5 h-3.5" />
+                    <span>Batch Settle in Payment Grouping</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Customer Balance Summary Metrics */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800">
+                  <span className="text-[10px] font-bold text-zinc-500 uppercase block">Active Requests</span>
+                  <span className="text-xl font-extrabold text-white block">
+                    {userSummary.activeRequests}
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800">
+                  <span className="text-[10px] font-bold text-zinc-500 uppercase block">Total Paid</span>
+                  <span className="text-xl font-extrabold text-emerald-400 block">
+                    {settings.currencySymbol}{userSummary.totalPaid.toLocaleString('en-IN')}
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800">
+                  <span className="text-[10px] font-bold text-zinc-500 uppercase block">Pending Due</span>
+                  <span className="text-xl font-extrabold text-rose-400 block">
+                    {settings.currencySymbol}{userSummary.outstandingBalance.toLocaleString('en-IN')}
+                  </span>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800">
+                  <span className="text-[10px] font-bold text-zinc-500 uppercase block">Extra Cash / Credit</span>
+                  <span className="text-xl font-extrabold text-amber-400 block">
+                    {settings.currencySymbol}{userSummary.totalExtraCash.toLocaleString('en-IN')}
+                  </span>
+                </div>
+              </div>
+
+              {/* Request History for this user */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold uppercase text-zinc-400 tracking-wider">
+                    Customer Request Ledger ({userAllReqs.length})
+                  </h4>
+                  {userSummary.rejectedRequests > 0 && (
+                    <span className="text-xs text-rose-400 font-bold">
+                      {userSummary.rejectedRequests} rejected (excluded from dues)
+                    </span>
+                  )}
+                </div>
+
+                {userAllReqs.length === 0 ? (
+                  <p className="text-xs text-zinc-500 p-6 text-center bg-zinc-950 rounded-2xl border border-zinc-800">
+                    No requests submitted by this user.
+                  </p>
+                ) : (
+                  <div className="space-y-2.5">
+                    {userAllReqs.map((r) => {
+                      const actual = getRequestPrice(r);
+                      const paid = getRequestPaid(r);
+                      const rem = getRequestRemaining(r);
+                      const isRejected = isRequestRejected(r);
+
+                      return (
+                        <div
+                          key={r.id}
+                          className={`p-4 rounded-2xl border flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs ${
+                            isRejected
+                              ? 'bg-rose-950/20 border-rose-900/40 text-zinc-400'
+                              : 'bg-zinc-950 border-zinc-800 text-zinc-300'
+                          }`}
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-extrabold text-white text-sm">{r.productName}</span>
+                              <span className="text-[10px] text-zinc-500 font-mono">#{r.id}</span>
+                              {getStatusBadge(r.status)}
+                              {r.extraCash && r.extraCash > 0 ? (
+                                <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                  Extra Cash: {settings.currencySymbol}{r.extraCash}
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="text-[11px] text-zinc-400">{r.purpose}</p>
+                            {isRejected && (
+                              <p className="text-[11px] text-rose-300 font-medium">
+                                Rejection Note: {r.rejectionNote || r.adminNotes || 'Rejected by admin'}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-between md:justify-end gap-3 pt-2 md:pt-0 border-t md:border-t-0 border-zinc-850">
+                            <div className="text-left md:text-right">
+                              <span className="font-extrabold text-white block">
+                                {settings.currencySymbol}{actual.toLocaleString('en-IN')}
+                              </span>
+                              {!isRejected ? (
+                                <span className="block text-[10px] text-zinc-400">
+                                  Paid: {settings.currencySymbol}{paid} | Rem: {settings.currencySymbol}{rem}
+                                </span>
+                              ) : (
+                                <span className="block text-[10px] text-rose-400">
+                                  Excluded from balance
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Actions on this request */}
+                            <div className="flex items-center gap-1.5">
+                              {r.status === 'Pending Review' && (
+                                <>
+                                  <button
+                                    onClick={() => {
+                                      setSelectedReq(r);
+                                      setModalAction('accept');
+                                    }}
+                                    className="p-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold"
+                                    title="Accept Request"
+                                  >
+                                    Accept
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setSelectedReq(r);
+                                      setModalAction('reject');
+                                    }}
+                                    className="p-1.5 bg-rose-600/20 hover:bg-rose-600 text-rose-300 rounded-lg text-xs font-bold border border-rose-500/30"
+                                    title="Reject Request"
+                                  >
+                                    Reject
+                                  </button>
+                                </>
+                              )}
+
+                              {!isRejected && rem > 0 && (
+                                <button
+                                  onClick={() => {
+                                    setSelectedReq(r);
+                                    setModalAction('payment');
+                                  }}
+                                  className="py-1 px-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] rounded-lg"
+                                >
+                                  Pay
+                                </button>
+                              )}
+
+                              <button
+                                onClick={() => {
+                                  setSelectedReq(r);
+                                  setModalAction('status');
+                                }}
+                                className="py-1 px-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-[11px] rounded-lg"
+                              >
+                                Status
+                              </button>
+
+                              <button
+                                onClick={() => {
+                                  setSelectedReq(r);
+                                  setModalAction('delete');
+                                }}
+                                className="p-1.5 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg text-xs transition-colors border border-rose-500/30"
+                                title="Delete Request"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+
+                              <button
+                                onClick={() => setInspectDocReq(r)}
+                                className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs transition-colors"
+                                title="View Document"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

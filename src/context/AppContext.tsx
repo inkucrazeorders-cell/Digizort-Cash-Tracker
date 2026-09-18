@@ -7,6 +7,7 @@ import {
   UserSettings,
   TimelineEvent,
   TimelineEventType,
+  GroupPayment,
 } from '../types';
 import {
   db,
@@ -17,7 +18,13 @@ import {
   onSnapshot,
   deleteDoc,
   updateDoc,
+  writeBatch,
 } from '../lib/firebase';
+import {
+  getRequestPrice,
+  getRequestRemaining,
+  isRequestRejected,
+} from '../lib/calculations';
 import confetti from 'canvas-confetti';
 
 interface AppContextType {
@@ -28,6 +35,7 @@ interface AppContextType {
   allRequests: OrderRequest[];
   allUsers: AppUser[];
   notifications: AppNotification[];
+  groupPayments: GroupPayment[];
   settings: UserSettings;
 
   // Mobile Auth
@@ -62,8 +70,18 @@ interface AppContextType {
   // Admin Actions
   adminAcceptRequest: (requestId: string, actualPrice: number, adminNotes?: string) => Promise<void>;
   adminRejectRequest: (requestId: string, reasonNotes: string) => Promise<void>;
+  adminDeleteRequest: (requestId: string) => Promise<void>;
   adminUpdateStatus: (requestId: string, newStatus: RequestStatus, notes?: string) => Promise<void>;
   adminRecordPayment: (requestId: string, paymentAmount: number, note?: string) => Promise<void>;
+  adminProcessGroupPayment: (params: {
+    userId: string;
+    userName: string;
+    userMobile: string;
+    requestIds: string[];
+    cashReceived: number;
+    paymentDate?: string;
+    notes?: string;
+  }) => Promise<string>;
   adminSuspendUser: (userId: string) => Promise<void>;
   adminUnsuspendUser: (userId: string) => Promise<void>;
   adminDeleteUser: (userId: string) => Promise<void>;
@@ -122,6 +140,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [allRequests, setAllRequests] = useState<OrderRequest[]>([]);
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [groupPayments, setGroupPayments] = useState<GroupPayment[]>([]);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -207,6 +226,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       },
       (error) => {
         console.error('Firestore notifications listener error:', error);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  // Real-time listener for GROUP PAYMENTS from Firestore
+  useEffect(() => {
+    const gpRef = collection(db, 'groupPayments');
+    const unsubscribe = onSnapshot(
+      gpRef,
+      (snapshot) => {
+        const fetched: GroupPayment[] = [];
+        snapshot.forEach((doc) => {
+          fetched.push({ id: doc.id, ...doc.data() } as GroupPayment);
+        });
+        fetched.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setGroupPayments(fetched);
+      },
+      (error) => {
+        console.error('Firestore groupPayments listener error:', error);
       }
     );
     return () => unsubscribe();
@@ -506,16 +545,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newTimelineEvt: TimelineEvent = {
       id: 'EVT-' + Date.now(),
       type: 'REQUEST_REJECTED',
-      title: 'Request Rejected',
+      title: 'Request Rejected by Admin',
       timestamp: nowIso,
-      totalPaidSoFar: req.amountPaid || 0,
-      remainingBalance: req.remainingAmount || 0,
+      totalPaidSoFar: 0,
+      remainingBalance: 0,
       notes: reasonNotes,
       actor: 'ADMIN',
     };
 
     await updateDoc(docRef, sanitizeForFirestore({
       status: 'Rejected',
+      rejectedAt: nowIso,
+      rejectedBy: 'ADMIN',
+      rejectionNote: reasonNotes,
+      remainingAmount: 0,
       adminNotes: reasonNotes,
       timeline: [...(req.timeline || []), newTimelineEvt],
       updatedAt: nowIso,
@@ -534,7 +577,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       requestId: requestId,
     }));
 
-    showToast('Request Rejected.');
+    showToast('Request marked as Rejected.');
+  };
+
+  const adminDeleteRequest = async (requestId: string) => {
+    const docRef = doc(db, 'requests', requestId);
+    await deleteDoc(docRef);
+    showToast('Request permanently deleted.');
   };
 
   const adminUpdateStatus = async (requestId: string, newStatus: RequestStatus, notes?: string) => {
@@ -586,26 +635,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const req = snap.data() as OrderRequest;
     const nowIso = new Date().toISOString();
 
-    const actual = req.actualPrice || req.expectedPrice || 0;
-    const newPaidTotal = (req.amountPaid || 0) + paymentAmount;
-    const newRemaining = Math.max(0, actual - newPaidTotal);
-    const newStatus: RequestStatus = newRemaining === 0 ? 'Paid' : 'Partially Paid';
+    const actual = req.actualPrice || req.expectedPrice || req.amount || 0;
+    const prevPaid = req.amountPaid || 0;
+    const due = Math.max(0, actual - prevPaid);
+
+    let newPaidTotal: number;
+    let newRemaining: number;
+    let extraCash: number = 0;
+    let newStatus: RequestStatus;
+
+    if (paymentAmount >= due) {
+      newPaidTotal = actual;
+      newRemaining = 0;
+      extraCash = paymentAmount - due;
+      newStatus = 'Paid';
+    } else {
+      newPaidTotal = prevPaid + paymentAmount;
+      newRemaining = Math.max(0, actual - newPaidTotal);
+      extraCash = 0;
+      newStatus = 'Partially Paid';
+    }
+
+    const noteText = note
+      ? (extraCash > 0 ? `${note} (Settled: ₹${due.toLocaleString('en-IN')}, Extra Cash: ₹${extraCash.toLocaleString('en-IN')})` : note)
+      : (extraCash > 0 ? `Payment received: ₹${paymentAmount.toLocaleString('en-IN')}. Settled: ₹${due.toLocaleString('en-IN')}, Extra Cash: ₹${extraCash.toLocaleString('en-IN')}` : `Payment of ₹${paymentAmount.toLocaleString('en-IN')} received.`);
 
     const newTimelineEvt: TimelineEvent = {
       id: 'EVT-' + Date.now(),
       type: newRemaining === 0 ? 'TRANSACTION_COMPLETED' : 'PARTIAL_PAYMENT',
       title: newRemaining === 0 ? 'Full Payment Received' : `Partial Payment Recorded (+₹${paymentAmount})`,
       timestamp: nowIso,
-      amountPaidThisStep: paymentAmount,
+      amountPaidThisStep: Math.min(paymentAmount, due),
       totalPaidSoFar: newPaidTotal,
       remainingBalance: newRemaining,
-      notes: note || `Payment of ₹${paymentAmount.toLocaleString('en-IN')} received.`,
+      notes: noteText,
       actor: 'ADMIN',
     };
 
     await updateDoc(docRef, sanitizeForFirestore({
       amountPaid: newPaidTotal,
       remainingAmount: newRemaining,
+      extraCash: (req.extraCash || 0) + extraCash,
+      cashReceived: paymentAmount,
       status: newStatus,
       timeline: [...(req.timeline || []), newTimelineEvt],
       updatedAt: nowIso,
@@ -617,18 +688,130 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Notify user
     const notifId = 'NOTIF-' + Date.now();
+    const notifMsg = extraCash > 0
+      ? `Received ₹${paymentAmount.toLocaleString('en-IN')} for "${req.productName}". Extra cash: ₹${extraCash.toLocaleString('en-IN')}. Request is fully paid!`
+      : `Received payment of ₹${paymentAmount.toLocaleString('en-IN')} for "${req.productName}". Remaining balance: ₹${newRemaining.toLocaleString('en-IN')}`;
+
     await setDoc(doc(db, 'notifications', notifId), sanitizeForFirestore({
       id: notifId,
       targetUserMobile: req.userMobile,
-      title: newRemaining === 0 ? 'Payment Completed!' : 'Partial Payment Recorded',
-      message: `Received payment of ₹${paymentAmount.toLocaleString('en-IN')} for "${req.productName}". Remaining: ₹${newRemaining.toLocaleString('en-IN')}`,
+      title: newRemaining === 0 ? 'Payment Settled!' : 'Partial Payment Recorded',
+      message: notifMsg,
       type: 'payment_recorded',
       timestamp: nowIso,
       read: false,
       requestId: requestId,
     }));
 
-    showToast(`Recorded payment of ₹${paymentAmount.toLocaleString('en-IN')}`);
+    showToast(extraCash > 0
+      ? `Payment recorded! Settled: ₹${due.toLocaleString('en-IN')} | Extra Cash: ₹${extraCash.toLocaleString('en-IN')}`
+      : `Recorded payment of ₹${paymentAmount.toLocaleString('en-IN')}`
+    );
+  };
+
+  const adminProcessGroupPayment = async (params: {
+    userId: string;
+    userName: string;
+    userMobile: string;
+    requestIds: string[];
+    cashReceived: number;
+    paymentDate?: string;
+    notes?: string;
+  }): Promise<string> => {
+    const { userId, userName, userMobile, requestIds, cashReceived, paymentDate, notes } = params;
+    const nowIso = new Date().toISOString();
+    const groupPaymentId = 'GP-' + Date.now().toString().slice(-6);
+
+    // Fetch target requests from allRequests
+    const selectedRequests = allRequests.filter((r) => requestIds.includes(r.id));
+    if (selectedRequests.length === 0) {
+      throw new Error('No valid requests found for this group payment.');
+    }
+
+    const totalDue = selectedRequests.reduce((sum, r) => sum + getRequestRemaining(r), 0);
+    const amountSettled = Math.min(cashReceived, totalDue);
+    const extraCash = Math.max(0, cashReceived - totalDue);
+    const finalStatus: 'PAID' | 'PARTIALLY_PAID' = cashReceived >= totalDue ? 'PAID' : 'PARTIALLY_PAID';
+
+    const batch = writeBatch(db);
+
+    // 1. Write Group Payment record
+    const groupPaymentDoc: GroupPayment = {
+      id: groupPaymentId,
+      userId,
+      userName,
+      userMobile,
+      requestIds,
+      requestTitles: selectedRequests.map((r) => r.productName),
+      totalDue,
+      amountReceived: cashReceived,
+      amountSettled,
+      extraCash,
+      paymentDate: paymentDate || new Date().toISOString().split('T')[0],
+      createdAt: nowIso,
+      createdBy: 'ADMIN',
+      status: finalStatus,
+      notes: notes || '',
+    };
+
+    batch.set(doc(db, 'groupPayments', groupPaymentId), sanitizeForFirestore(groupPaymentDoc));
+
+    // 2. Allocate payment sequentially across selected requests
+    let unallocated = cashReceived;
+    for (const req of selectedRequests) {
+      const reqDue = getRequestRemaining(req);
+      const prevPaid = Number(req.amountPaid) || 0;
+      const price = getRequestPrice(req);
+
+      const allocation = Math.min(unallocated, reqDue);
+      unallocated -= allocation;
+
+      const newTotalPaid = prevPaid + allocation;
+      const newRemaining = Math.max(0, price - newTotalPaid);
+      const newReqStatus: RequestStatus = newRemaining === 0 ? 'Paid' : 'Partially Paid';
+
+      const timelineEvt: TimelineEvent = {
+        id: 'EVT-' + Date.now() + '-' + req.id.slice(-4),
+        type: newRemaining === 0 ? 'TRANSACTION_COMPLETED' : 'PARTIAL_PAYMENT',
+        title: `Group Payment #${groupPaymentId}`,
+        timestamp: nowIso,
+        amountPaidThisStep: allocation,
+        totalPaidSoFar: newTotalPaid,
+        remainingBalance: newRemaining,
+        notes: `Group Payment #${groupPaymentId}. Total cash received: ₹${cashReceived.toLocaleString('en-IN')}, allocated to this request: ₹${allocation.toLocaleString('en-IN')}${notes ? ` (${notes})` : ''}`,
+        actor: 'ADMIN',
+      };
+
+      const reqRef = doc(db, 'requests', req.id);
+      batch.update(reqRef, sanitizeForFirestore({
+        amountPaid: newTotalPaid,
+        remainingAmount: newRemaining,
+        status: newReqStatus,
+        groupPaymentId: groupPaymentId,
+        timeline: [...(req.timeline || []), timelineEvt],
+        updatedAt: nowIso,
+      }));
+    }
+
+    // 3. User notification
+    const notifId = 'NOTIF-' + Date.now();
+    const notifMsg = `Combined payment #${groupPaymentId} processed for ${selectedRequests.length} request(s). Received: ₹${cashReceived.toLocaleString('en-IN')}, Settled: ₹${amountSettled.toLocaleString('en-IN')}${extraCash > 0 ? `, Extra cash: ₹${extraCash.toLocaleString('en-IN')}` : ''}.`;
+
+    batch.set(doc(db, 'notifications', notifId), sanitizeForFirestore({
+      id: notifId,
+      targetUserMobile: userMobile,
+      title: `Group Payment Received (${selectedRequests.length} Requests)`,
+      message: notifMsg,
+      type: 'payment_recorded',
+      timestamp: nowIso,
+      read: false,
+    }));
+
+    await batch.commit();
+
+    confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+    showToast(`Group Payment #${groupPaymentId} processed successfully!`);
+    return groupPaymentId;
   };
 
   const adminSuspendUser = async (userId: string) => {
@@ -656,6 +839,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         allRequests,
         allUsers,
         notifications: userNotifications,
+        groupPayments,
         settings,
         checkMobileRegistered,
         registerUser,
@@ -668,8 +852,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateUserProfile,
         adminAcceptRequest,
         adminRejectRequest,
+        adminDeleteRequest,
         adminUpdateStatus,
         adminRecordPayment,
+        adminProcessGroupPayment,
         adminSuspendUser,
         adminUnsuspendUser,
         adminDeleteUser,

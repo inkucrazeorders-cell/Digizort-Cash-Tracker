@@ -49,6 +49,25 @@
         "autoRemindDays": { "type": "number" },
         "userId": { "type": "string" }
       }
+    },
+    "groupPayments": {
+      "path": "groupPayments/{paymentId}",
+      "fields": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userMobile": { "type": "string" },
+        "requestIds": { "type": "array" },
+        "totalDue": { "type": "number" },
+        "amountReceived": { "type": "number" },
+        "amountSettled": { "type": "number" },
+        "extraCash": { "type": "number" },
+        "paymentDate": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" }
+      }
     }
   }
 }

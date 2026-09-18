@@ -17,6 +17,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Allow access to group payments collection
+    match /groupPayments/{paymentId} {
+      allow read, write: if true;
+    }
+
     // Legacy fallback user documents
     match /users/{userId} {
       allow read, write: if true;

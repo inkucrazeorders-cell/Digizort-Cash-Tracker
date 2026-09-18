@@ -3,6 +3,13 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../context/AppContext';
 import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
 import { OrderRequest, RequestStatus } from '../types';
+import {
+  calculateAccountSummary,
+  isRequestRejected,
+  getRequestPrice,
+  getRequestRemaining,
+  getRequestPaid,
+} from '../lib/calculations';
 import { NewRequestModal } from './NewRequestModal';
 import { DigitalDocumentCard } from './DigitalDocumentCard';
 import {
@@ -57,8 +64,18 @@ export const UserPortal: React.FC = () => {
 
   if (!currentUser) return null;
 
-  // Filter user requests
+  // Non-rejected user requests (active ledger)
+  const nonRejectedUserRequests = userRequests.filter((req) => !isRequestRejected(req));
+
+  // Filter user requests for display
   const filteredRequests = userRequests.filter((req) => {
+    // If status filter is 'All', strictly exclude rejected requests as requested
+    if (statusFilter === 'All') {
+      if (isRequestRejected(req)) return false;
+    } else if (req.status !== statusFilter) {
+      return false;
+    }
+
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       const matchesName = req.productName.toLowerCase().includes(q);
@@ -66,27 +83,24 @@ export const UserPortal: React.FC = () => {
       const matchesId = req.id.toLowerCase().includes(q);
       if (!matchesName && !matchesPurpose && !matchesId) return false;
     }
-    if (statusFilter !== 'All' && req.status !== statusFilter) {
-      return false;
-    }
     return true;
   });
 
-  // Calculate user metrics
-  const totalRequestsCount = userRequests.length;
-  const pendingRequestsCount = userRequests.filter(
-    (r) => r.status === 'Pending Review' || r.status === 'Accepted' || r.status === 'Processing' || r.status === 'Ordered'
+  // Calculate user metrics using centralized helper (strictly excludes rejected requests)
+  const userSummary = calculateAccountSummary(userRequests);
+  const totalRequestsCount = nonRejectedUserRequests.length;
+  const pendingRequestsCount = nonRejectedUserRequests.filter(
+    (r) =>
+      r.status === 'Pending Review' ||
+      r.status === 'Accepted' ||
+      r.status === 'Processing' ||
+      r.status === 'Ordered' ||
+      r.status === 'Waiting For Payment' ||
+      r.status === 'Partially Paid'
   ).length;
-  const totalPendingBalance = userRequests.reduce((sum, r) => {
-    const actual = r.actualPrice || r.expectedPrice || 0;
-    const paid = r.amountPaid || (r.status === 'Paid' ? actual : 0);
-    return sum + (r.remainingAmount ?? (r.status === 'Paid' ? 0 : Math.max(0, actual - paid)));
-  }, 0);
-
-  const totalPaidSoFar = userRequests.reduce((sum, r) => {
-    const actual = r.actualPrice || r.expectedPrice || 0;
-    return sum + (r.amountPaid || (r.status === 'Paid' ? actual : 0));
-  }, 0);
+  const totalPendingBalance = userSummary.totalPending;
+  const totalPaidSoFar = userSummary.totalPaid;
+  const totalExtraCash = userSummary.totalExtraCash;
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -430,6 +444,11 @@ export const UserPortal: React.FC = () => {
                           <span className="text-sm font-extrabold text-white block">
                             Paid: {settings.currencySymbol}{paid.toLocaleString('en-IN')}
                           </span>
+                          {req.extraCash && req.extraCash > 0 ? (
+                            <span className="text-[10px] font-extrabold text-amber-400 block">
+                              Extra Cash: {settings.currencySymbol}{req.extraCash.toLocaleString('en-IN')}
+                            </span>
+                          ) : null}
                           {rem > 0 && (
                             <span className="text-[10px] font-bold text-rose-400 block">
                               Due: {settings.currencySymbol}{rem.toLocaleString('en-IN')}

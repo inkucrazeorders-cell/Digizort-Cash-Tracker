@@ -97,12 +97,37 @@ export interface OrderRequest {
   timeline: TimelineEvent[];
   createdAt: string;
   updatedAt: string;
+  // Extra fields for rejection, payment, and grouping
+  rejectedAt?: string;
+  rejectedBy?: string;
+  rejectionNote?: string;
+  extraCash?: number;
+  cashReceived?: number;
+  groupPaymentId?: string;
   // Compatibility fields for transaction legacy support
   amount?: number;
   category?: string;
   date?: string;
   friendName?: string;
   phone?: string;
+  notes?: string;
+}
+
+export interface GroupPayment {
+  id: string;
+  userId: string;
+  userName: string;
+  userMobile: string;
+  requestIds: string[];
+  requestTitles?: string[];
+  totalDue: number;
+  amountReceived: number;
+  amountSettled: number;
+  extraCash: number;
+  paymentDate: string;
+  createdAt: string;
+  createdBy: 'ADMIN' | string;
+  status: 'PAID' | 'PARTIALLY_PAID';
   notes?: string;
 }
 
