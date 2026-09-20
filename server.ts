@@ -17,28 +17,35 @@ async function startServer() {
 
   // Status & configuration check for WhatsApp Cloud API (Safe, no secrets exposed)
   app.get('/api/whatsapp/status', (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
     const hasToken = !!process.env.WHATSAPP_API_TOKEN || !!process.env.WHATSAPP_ACCESS_TOKEN;
     const hasPhoneId = !!process.env.WHATSAPP_PHONE_NUMBER_ID;
-    const senderNumber = process.env.WHATSAPP_SENDER_NUMBER || '8129043397';
+    const hasBusinessAccountId = !!process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+    const senderNumber = process.env.WHATSAPP_SENDER_NUMBER || '+91 8129043397';
+    const apiVersion = process.env.WHATSAPP_API_VERSION || 'v26.0';
 
     res.json({
       configured: hasToken && hasPhoneId,
       hasToken,
       hasPhoneId,
+      hasBusinessAccountId,
       senderNumber,
-      apiVersion: process.env.WHATSAPP_API_VERSION || 'v21.0',
+      apiVersion,
+      platform: 'express',
     });
   });
 
   // Automated WhatsApp message dispatch endpoint via WhatsApp Cloud API
   app.post('/api/whatsapp/send', async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
     try {
-      const { to, message, requestId, customerName } = req.body;
+      const { to, message, requestId, customerName } = req.body || {};
 
       if (!to || !message) {
         return res.status(400).json({
           success: false,
-          error: 'Missing required fields: both "to" (phone number) and "message" are required.',
+          error: 'Missing required fields',
+          details: 'Both "to" (phone number) and "message" are required.',
         });
       }
 
@@ -54,27 +61,40 @@ async function startServer() {
       if (cleanedPhone.length < 10) {
         return res.status(400).json({
           success: false,
-          error: `Invalid recipient phone number format: "${to}". Please verify customer mobile number.`,
+          error: 'Invalid recipient phone number format',
+          details: `Phone number "${to}" is invalid. Please verify the customer mobile number.`,
         });
       }
 
       const token = process.env.WHATSAPP_API_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN;
       const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-      const apiVersion = process.env.WHATSAPP_API_VERSION || 'v21.0';
+      const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+      const senderNumber = process.env.WHATSAPP_SENDER_NUMBER || '+91 8129043397';
+      const apiVersion = process.env.WHATSAPP_API_VERSION || 'v26.0';
 
-      // If credentials are not configured, reject with clear instructions so the message is not falsely marked as sent
+      // Safe server-side debug logging: check env variables presence without exposing token
+      console.log('[WhatsApp API Server] Environment check:', {
+        hasToken: !!token,
+        hasPhoneNumberId: !!phoneNumberId,
+        hasBusinessAccountId: !!businessAccountId,
+        configuredSenderNumber: senderNumber,
+        apiVersion,
+      });
+
       if (!token || !phoneNumberId) {
+        console.warn('[WhatsApp API Server] Missing credentials: WHATSAPP_API_TOKEN or WHATSAPP_PHONE_NUMBER_ID');
         return res.status(400).json({
           success: false,
-          code: 'CREDENTIALS_REQUIRED',
-          error:
-            'WhatsApp Cloud API credentials are not yet configured. Please set WHATSAPP_API_TOKEN and WHATSAPP_PHONE_NUMBER_ID in your environment variables.',
-          configured: false,
+          error: 'WhatsApp API error: Missing credentials',
+          details:
+            'WHATSAPP_API_TOKEN and WHATSAPP_PHONE_NUMBER_ID must be configured in environment variables.',
         });
       }
 
       // Send message via Meta WhatsApp Business Cloud API
       const metaUrl = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
+      console.log('[WhatsApp API Server] Calling endpoint:', metaUrl, `to: ${cleanedPhone}`);
+
       const payload = {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
@@ -95,38 +115,50 @@ async function startServer() {
         body: JSON.stringify(payload),
       });
 
-      const data = await metaResponse.json();
+      const statusCode = metaResponse.status;
+      let data: any = {};
+      const rawText = await metaResponse.text();
+
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = { raw: rawText };
+      }
+
+      // Log response status and body (NEVER logging the token)
+      console.log(`[WhatsApp API Server] Meta API HTTP ${statusCode} response:`, JSON.stringify(data));
 
       if (!metaResponse.ok) {
-        const errorDetail =
+        const errorMsg =
           data?.error?.message ||
           data?.error?.error_data?.details ||
-          `WhatsApp Cloud API returned error code ${metaResponse.status}`;
-        console.error('Meta WhatsApp Cloud API error:', data);
-        return res.status(metaResponse.status >= 400 && metaResponse.status < 500 ? metaResponse.status : 502).json({
+          `WhatsApp Cloud API returned error (HTTP ${statusCode})`;
+        const details = data?.error?.error_user_msg || data?.error?.details || JSON.stringify(data?.error || data);
+
+        return res.status(statusCode >= 400 && statusCode < 500 ? statusCode : 502).json({
           success: false,
-          error: errorDetail,
-          metaErrorCode: data?.error?.code,
-          details: data?.error,
+          error: errorMsg,
+          details: details,
         });
       }
 
       const messageId = data?.messages?.[0]?.id || 'delivered';
-      console.log(`WhatsApp message dispatched successfully to ${cleanedPhone} (ID: ${messageId})`);
+      console.log(`[WhatsApp API Server] Message sent to ${cleanedPhone} (ID: ${messageId})`);
 
-      return res.json({
+      return res.status(200).json({
         success: true,
-        messageId,
+        message: 'WhatsApp message sent successfully',
+        message_id: messageId,
         recipient: cleanedPhone,
-        customerName: customerName || 'Customer',
-        requestId: requestId || 'N/A',
-        status: 'accepted',
+        customer_name: customerName || 'Customer',
+        request_id: requestId || 'N/A',
       });
     } catch (err: any) {
-      console.error('Server error dispatching WhatsApp message:', err);
+      console.error('[WhatsApp API Server] Fatal error:', err);
       return res.status(500).json({
         success: false,
-        error: err?.message || 'Server error occurred while dispatching WhatsApp message.',
+        error: 'WhatsApp API error',
+        details: err?.message || 'Server error occurred while dispatching WhatsApp message.',
       });
     }
   });
