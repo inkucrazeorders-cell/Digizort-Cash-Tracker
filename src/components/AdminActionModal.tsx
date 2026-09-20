@@ -14,12 +14,15 @@ import {
   AlertTriangle,
   Trash2,
   Sparkles,
+  MessageSquare,
+  Coins,
 } from 'lucide-react';
 
 interface AdminActionModalProps {
   request: OrderRequest | null;
   actionType: 'accept' | 'reject' | 'status' | 'payment' | 'delete' | null;
   onClose: () => void;
+  onOpenDoc?: (req: OrderRequest) => void;
 }
 
 const ALL_STATUSES: RequestStatus[] = [
@@ -38,6 +41,7 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
   request,
   actionType,
   onClose,
+  onOpenDoc,
 }) => {
   const {
     adminAcceptRequest,
@@ -45,6 +49,8 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
     adminDeleteRequest,
     adminUpdateStatus,
     adminRecordPayment,
+    adminUseBalance,
+    getUserBalanceInfo,
     settings,
   } = useApp();
 
@@ -56,16 +62,23 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
   const [selectedStatus, setSelectedStatus] = useState<RequestStatus>(
     request?.status || 'Processing'
   );
+  const [openDocAfterSave, setOpenDocAfterSave] = useState<boolean>(
+    actionType === 'status' || actionType === 'payment' || actionType === 'accept'
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [paymentSource, setPaymentSource] = useState<'cash' | 'balance'>('cash');
 
   if (!request || !actionType) return null;
+
+  const userBalInfo = getUserBalanceInfo(request.userMobile, request.userId);
+  const userAvailableCredit = userBalInfo.availableBalance;
 
   const actualPrice = request.actualPrice || request.expectedPrice || 0;
   const currentPaid = request.amountPaid || (request.status === 'Paid' ? actualPrice : 0);
   const remaining = request.remainingAmount ?? (request.status === 'Paid' ? 0 : Math.max(0, actualPrice - currentPaid));
 
   const paymentNum = Number(paymentAmount) || 0;
-  const isOverpayment = paymentNum > remaining;
+  const isOverpayment = paymentSource === 'cash' ? paymentNum > remaining : false;
   const extraCash = isOverpayment ? paymentNum - remaining : 0;
   const settledAmount = Math.min(paymentNum, remaining);
   const balanceAfter = Math.max(0, remaining - paymentNum);
@@ -86,10 +99,35 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
         await adminUpdateStatus(request.id, selectedStatus, adminNote.trim() || undefined);
       } else if (actionType === 'payment') {
         if (paymentNum <= 0) return;
-        await adminRecordPayment(request.id, paymentNum, adminNote.trim() || undefined);
+        if (paymentSource === 'balance') {
+          if (paymentNum > userAvailableCredit) {
+            throw new Error(`Cannot use more balance than available (₹${userAvailableCredit}).`);
+          }
+          await adminUseBalance({
+            userId: request.userId,
+            userMobile: request.userMobile,
+            userName: request.userName,
+            amount: paymentNum,
+            relatedRequestId: request.id,
+            notes: adminNote.trim() || undefined,
+          });
+        } else {
+          await adminRecordPayment(request.id, paymentNum, adminNote.trim() || undefined);
+        }
       }
 
-      onClose();
+      if (openDocAfterSave && onOpenDoc && actionType !== 'delete') {
+        const updatedReq: OrderRequest = {
+          ...request,
+          status: actionType === 'status' ? selectedStatus : actionType === 'accept' ? 'Accepted' : actionType === 'reject' ? 'Rejected' : request.status,
+          actualPrice: actionType === 'accept' ? (Number(assignedPrice) || request.expectedPrice || 0) : request.actualPrice,
+          amountPaid: actionType === 'payment' ? currentPaid + settledAmount : request.amountPaid,
+          remainingAmount: actionType === 'payment' ? balanceAfter : actionType === 'reject' ? 0 : request.remainingAmount,
+        };
+        onOpenDoc(updatedReq);
+      } else {
+        onClose();
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -264,32 +302,108 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
                   </span>
                 </div>
 
+                {userAvailableCredit > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1.5 p-1 bg-zinc-950 border border-zinc-800 rounded-xl">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPaymentSource('cash');
+                          setPaymentAmount(String(remaining));
+                        }}
+                        className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                          paymentSource === 'cash'
+                            ? 'bg-zinc-800 text-white shadow-sm'
+                            : 'text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        Cash / Direct Payment
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPaymentSource('balance');
+                          setPaymentAmount(String(Math.min(userAvailableCredit, remaining)));
+                        }}
+                        className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                          paymentSource === 'balance'
+                            ? 'bg-blue-600 text-white shadow-sm'
+                            : 'text-blue-400 hover:text-blue-300'
+                        }`}
+                      >
+                        <Coins className="w-3.5 h-3.5" />
+                        <span>Use Balance ({settings.currencySymbol}{userAvailableCredit})</span>
+                      </button>
+                    </div>
+
+                    {paymentSource === 'balance' && (
+                      <div className="p-2.5 rounded-xl bg-blue-950/30 border border-blue-800/40 text-[11px] text-blue-300 flex items-center justify-between">
+                        <span>Customer Available Balance:</span>
+                        <span className="font-extrabold text-white text-xs">
+                          {settings.currencySymbol}{userAvailableCredit.toLocaleString('en-IN')}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block text-xs font-bold text-zinc-300">
-                      Amount Received ({settings.currencySymbol}) <span className="text-rose-400">*</span>
+                      {paymentSource === 'balance' ? 'Amount to Use from Balance' : 'Amount Received'}{' '}
+                      ({settings.currencySymbol}) <span className="text-rose-400">*</span>
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => setPaymentAmount(String(remaining))}
-                      className="text-[10px] text-emerald-400 font-bold hover:underline"
-                    >
-                      Fill Exact Due ({settings.currencySymbol}{remaining.toLocaleString('en-IN')})
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {paymentSource === 'balance' ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setPaymentAmount(String(Math.min(userAvailableCredit, remaining)))}
+                            className="text-[10px] text-blue-400 font-bold hover:underline"
+                          >
+                            Pay Due ({settings.currencySymbol}{Math.min(userAvailableCredit, remaining)})
+                          </button>
+                          {userAvailableCredit < remaining && (
+                            <button
+                              type="button"
+                              onClick={() => setPaymentAmount(String(userAvailableCredit))}
+                              className="text-[10px] text-emerald-400 font-bold hover:underline"
+                            >
+                              All Balance ({settings.currencySymbol}{userAvailableCredit})
+                            </button>
+                          )}
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setPaymentAmount(String(remaining))}
+                          className="text-[10px] text-emerald-400 font-bold hover:underline"
+                        >
+                          Fill Exact Due ({settings.currencySymbol}{remaining.toLocaleString('en-IN')})
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <input
                     type="number"
                     step="any"
                     min="1"
+                    max={paymentSource === 'balance' ? userAvailableCredit : undefined}
                     required
-                    placeholder="Enter cash received (e.g. 300)"
+                    placeholder={paymentSource === 'balance' ? `Max ${userAvailableCredit}` : 'Enter cash received'}
                     value={paymentAmount}
                     onChange={(e) => setPaymentAmount(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-emerald-400 font-extrabold text-base focus:outline-none focus:border-emerald-500"
+                    className={`w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 font-extrabold text-base focus:outline-none ${
+                      paymentSource === 'balance'
+                        ? 'text-blue-400 focus:border-blue-500'
+                        : 'text-emerald-400 focus:border-emerald-500'
+                    }`}
                     id="input-admin-payment-amount"
                   />
                   <p className="text-[10px] text-zinc-500 mt-1">
-                    Overpayments are supported. Any excess payment will be safely tracked as Extra Cash.
+                    {paymentSource === 'balance'
+                      ? 'Deducts from user credit. Remaining balance stays in account.'
+                      : 'Overpayments are supported. Excess payment is safely credited as customer balance.'}
                   </p>
                 </div>
 
@@ -303,8 +417,10 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-zinc-400">Cash Received:</span>
-                      <span className="font-bold text-emerald-400">
+                      <span className="text-zinc-400">
+                        {paymentSource === 'balance' ? 'Deducted from Balance:' : 'Cash Received:'}
+                      </span>
+                      <span className={`font-bold ${paymentSource === 'balance' ? 'text-blue-400' : 'text-emerald-400'}`}>
                         {settings.currencySymbol}{paymentNum.toLocaleString('en-IN')}
                       </span>
                     </div>
@@ -314,16 +430,25 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
                         {settings.currencySymbol}{settledAmount.toLocaleString('en-IN')}
                       </span>
                     </div>
-                    {extraCash > 0 && (
+                    {paymentSource === 'balance' && (
+                      <div className="flex justify-between pt-1.5 border-t border-zinc-800">
+                        <span className="text-zinc-400">Remaining Customer Balance:</span>
+                        <span className="font-extrabold text-emerald-400">
+                          {settings.currencySymbol}{Math.max(0, userAvailableCredit - paymentNum).toLocaleString('en-IN')}
+                          {userAvailableCredit - paymentNum === 0 && ' (Cleared)'}
+                        </span>
+                      </div>
+                    )}
+                    {extraCash > 0 && paymentSource === 'cash' && (
                       <div className="flex justify-between pt-1.5 border-t border-zinc-800 font-extrabold text-amber-400">
                         <span className="flex items-center gap-1">
-                          <Sparkles className="w-3.5 h-3.5" /> Extra Cash (To Refund/Credit):
+                          <Sparkles className="w-3.5 h-3.5" /> Extra Cash (To Credit):
                         </span>
                         <span>{settings.currencySymbol}{extraCash.toLocaleString('en-IN')}</span>
                       </div>
                     )}
                     <div className="flex justify-between pt-1.5 border-t border-zinc-800">
-                      <span className="text-zinc-400">Remaining Balance:</span>
+                      <span className="text-zinc-400">Request Remaining Due:</span>
                       <span className={`font-extrabold ${balanceAfter === 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {settings.currencySymbol}{balanceAfter.toLocaleString('en-IN')}
                         {balanceAfter === 0 ? ' (Fully Settled)' : ' (Remaining)'}
@@ -345,6 +470,21 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
                   />
                 </div>
               </>
+            )}
+
+            {actionType !== 'delete' && (
+              <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none py-1 px-1 rounded-lg hover:bg-zinc-800/40 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={openDocAfterSave}
+                  onChange={(e) => setOpenDocAfterSave(e.target.checked)}
+                  className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-0"
+                />
+                <span className="flex items-center gap-1.5">
+                  <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Open WhatsApp Statement after saving</span>
+                </span>
+              </label>
             )}
 
             <div className="flex items-center gap-3 pt-2">

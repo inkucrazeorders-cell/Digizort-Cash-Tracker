@@ -22,6 +22,16 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Allow access to balance transactions collection
+    match /balance_transactions/{transactionId} {
+      allow read, write: if true;
+    }
+
+    // Allow access to balance payout requests collection
+    match /balance_requests/{requestId} {
+      allow read, write: if true;
+    }
+
     // Legacy fallback user documents
     match /users/{userId} {
       allow read, write: if true;

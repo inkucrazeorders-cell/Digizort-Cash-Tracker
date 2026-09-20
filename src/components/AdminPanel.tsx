@@ -15,6 +15,9 @@ import {
 } from '../lib/calculations';
 import { AdminActionModal } from './AdminActionModal';
 import { DigitalDocumentCard } from './DigitalDocumentCard';
+import { BalanceManagementModal } from './BalanceManagementModal';
+import { BalanceLedgerView } from './BalanceLedgerView';
+import { AdminBalanceRequestsView } from './AdminBalanceRequestsView';
 import {
   ShieldCheck,
   ShoppingBag,
@@ -54,18 +57,27 @@ export const AdminPanel: React.FC = () => {
     allRequests,
     allUsers,
     groupPayments,
+    balanceRequests,
     settings,
     logoutUser,
     adminSuspendUser,
     adminUnsuspendUser,
     adminDeleteUser,
     adminProcessGroupPayment,
+    getUserBalanceInfo,
     showToast,
   } = useApp();
 
   const [adminTab, setAdminTab] = useState<
-    'dashboard' | 'requests' | 'group_payment' | 'rejected' | 'users' | 'reports'
+    'dashboard' | 'requests' | 'group_payment' | 'balance_requests' | 'rejected' | 'users' | 'reports'
   >('dashboard');
+
+  const pendingBalanceRequestsCount = balanceRequests.filter((r) => r.status === 'Pending').length;
+
+  // Balance Action Modal State (Pay Balance / Use Balance)
+  const [balanceModalUser, setBalanceModalUser] = useState<AppUser | null>(null);
+  const [balanceModalMode, setBalanceModalMode] = useState<'pay' | 'use' | null>(null);
+  const [balanceModalPreselectedReqId, setBalanceModalPreselectedReqId] = useState<string | undefined>(undefined);
 
   // Action Modal State
   const [selectedReq, setSelectedReq] = useState<OrderRequest | null>(null);
@@ -327,6 +339,24 @@ export const AdminPanel: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setAdminTab('balance_requests')}
+            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
+              adminTab === 'balance_requests'
+                ? 'bg-rose-600 text-white shadow-md'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+            }`}
+            id="admin-tab-balance-requests"
+          >
+            <Coins className="w-4 h-4 text-amber-400" />
+            <span>Balance Requests ({balanceRequests.length})</span>
+            {pendingBalanceRequestsCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-amber-500 text-black font-extrabold text-[10px] animate-pulse">
+                {pendingBalanceRequestsCount}
+              </span>
+            )}
+          </button>
+
+          <button
             onClick={() => setAdminTab('rejected')}
             className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
               adminTab === 'rejected'
@@ -369,6 +399,33 @@ export const AdminPanel: React.FC = () => {
         {/* TAB 1: DASHBOARD STATS */}
         {adminTab === 'dashboard' && (
           <div className="space-y-6">
+            {/* Pending Balance Requests Alert Banner */}
+            {pendingBalanceRequestsCount > 0 && (
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-zinc-900 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/30">
+                    <Coins className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-extrabold text-amber-300">
+                      {pendingBalanceRequestsCount} Customer Balance Payout Request{pendingBalanceRequestsCount > 1 ? 's' : ''} Pending Review
+                    </h4>
+                    <p className="text-xs text-zinc-400">
+                      Customers have submitted requests to withdraw/refund funds from their available balances.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setAdminTab('balance_requests')}
+                  className="py-2 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs shadow-md transition-all self-start sm:self-auto shrink-0 flex items-center gap-1.5"
+                  id="btn-admin-dash-review-payouts"
+                >
+                  <span>Review Payout Requests</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
             {/* Realtime Metrics Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
               <div className="p-5 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-2">
@@ -1135,6 +1192,11 @@ export const AdminPanel: React.FC = () => {
           );
         })()}
 
+        {/* TAB: BALANCE REQUESTS */}
+        {adminTab === 'balance_requests' && (
+          <AdminBalanceRequestsView />
+        )}
+
         {/* TAB: REJECTED REQUESTS (COMPLETE SEPARATION) */}
         {adminTab === 'rejected' && (
           <div className="space-y-4">
@@ -1346,14 +1408,74 @@ export const AdminPanel: React.FC = () => {
                           </div>
                         </div>
 
-                        {userSummary.totalExtraCash > 0 && (
-                          <div className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-[11px]">
-                            <span className="text-amber-400 font-bold">Extra Cash:</span>
-                            <span className="text-amber-300 font-extrabold">
-                              {settings.currencySymbol}{userSummary.totalExtraCash.toLocaleString('en-IN')}
-                            </span>
-                          </div>
-                        )}
+                        {(() => {
+                          const balInfo = getUserBalanceInfo(usr.mobileNumber, usr.id);
+                          const avail = balInfo.availableBalance;
+
+                          if (avail > 0) {
+                            return (
+                              <div className="p-3 rounded-2xl bg-emerald-950/30 border border-emerald-500/30 space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px] text-emerald-400 font-extrabold uppercase tracking-wider">
+                                    Available Balance / Credit
+                                  </span>
+                                  <span className="text-sm font-extrabold text-emerald-300">
+                                    {settings.currencySymbol}{avail.toLocaleString('en-IN')}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1.5 pt-1">
+                                  <button
+                                    onClick={() => {
+                                      setBalanceModalUser(usr);
+                                      setBalanceModalMode('pay');
+                                    }}
+                                    className="py-1.5 px-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-[11px] rounded-xl flex-1 shadow-sm flex items-center justify-center gap-1 transition-all"
+                                    title="Record returning cash to user"
+                                  >
+                                    <DollarSign className="w-3 h-3" />
+                                    <span>Pay Balance</span>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setBalanceModalUser(usr);
+                                      setBalanceModalMode('use');
+                                    }}
+                                    className="py-1.5 px-2.5 bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-[11px] rounded-xl flex-1 shadow-sm flex items-center justify-center gap-1 transition-all"
+                                    title="Use balance credit"
+                                  >
+                                    <Coins className="w-3 h-3" />
+                                    <span>Use Balance</span>
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          if (balInfo.hasTransactions && avail === 0) {
+                            return (
+                              <div className="px-3 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-between text-[11px]">
+                                <span className="text-zinc-500 font-medium">Customer Balance:</span>
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-950/50 text-emerald-400 border border-emerald-500/30 text-[9px] font-extrabold uppercase flex items-center gap-1">
+                                  <CheckCircle2 className="w-2.5 h-2.5" />
+                                  <span>Cleared ({settings.currencySymbol}0)</span>
+                                </span>
+                              </div>
+                            );
+                          }
+
+                          if (userSummary.totalExtraCash > 0) {
+                            return (
+                              <div className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-[11px]">
+                                <span className="text-amber-400 font-bold">Extra Cash:</span>
+                                <span className="text-amber-300 font-extrabold">
+                                  {settings.currencySymbol}{userSummary.totalExtraCash.toLocaleString('en-IN')}
+                                </span>
+                              </div>
+                            );
+                          }
+
+                          return null;
+                        })()}
 
                         {usr.email && (
                           <p className="text-[11px] text-zinc-400">Email: {usr.email}</p>
@@ -1470,6 +1592,11 @@ export const AdminPanel: React.FC = () => {
             setSelectedReq(null);
             setModalAction(null);
           }}
+          onOpenDoc={(updatedReq) => {
+            setSelectedReq(null);
+            setModalAction(null);
+            setInspectDocReq(updatedReq);
+          }}
         />
       )}
 
@@ -1502,6 +1629,8 @@ export const AdminPanel: React.FC = () => {
           (r) => r.userMobile === selectedUserDetail.mobileNumber || r.userId === selectedUserDetail.id
         );
         const userSummary = calculateAccountSummary(userAllReqs);
+        const userBalInfo = getUserBalanceInfo(selectedUserDetail.mobileNumber, selectedUserDetail.id);
+        const availableBalance = userBalInfo.availableBalance;
 
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-zinc-950/85 backdrop-blur-md overflow-y-auto">
@@ -1528,20 +1657,49 @@ export const AdminPanel: React.FC = () => {
                   </div>
                 </div>
 
-                {userSummary.outstandingBalance > 0 && (
-                  <button
-                    onClick={() => {
-                      const uid = selectedUserDetail.id;
-                      setSelectedUserDetail(null);
-                      setSelectedGroupUserId(uid);
-                      setAdminTab('group_payment');
-                    }}
-                    className="py-2 px-3.5 bg-gradient-to-r from-rose-600 to-[#B71C1C] hover:brightness-110 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all"
-                  >
-                    <CreditCard className="w-3.5 h-3.5" />
-                    <span>Batch Settle in Payment Grouping</span>
-                  </button>
-                )}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {availableBalance > 0 && (
+                    <>
+                      <button
+                        onClick={() => {
+                          setBalanceModalUser(selectedUserDetail);
+                          setBalanceModalMode('pay');
+                        }}
+                        className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all"
+                        id="btn-modal-pay-balance"
+                      >
+                        <DollarSign className="w-3.5 h-3.5" />
+                        <span>Pay Balance ({settings.currencySymbol}{availableBalance.toLocaleString('en-IN')})</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setBalanceModalUser(selectedUserDetail);
+                          setBalanceModalMode('use');
+                        }}
+                        className="py-2 px-3.5 bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all"
+                        id="btn-modal-use-balance"
+                      >
+                        <Coins className="w-3.5 h-3.5" />
+                        <span>Use Balance</span>
+                      </button>
+                    </>
+                  )}
+
+                  {userSummary.outstandingBalance > 0 && (
+                    <button
+                      onClick={() => {
+                        const uid = selectedUserDetail.id;
+                        setSelectedUserDetail(null);
+                        setSelectedGroupUserId(uid);
+                        setAdminTab('group_payment');
+                      }}
+                      className="py-2 px-3.5 bg-gradient-to-r from-rose-600 to-[#B71C1C] hover:brightness-110 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all"
+                    >
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>Batch Settle in Payment Grouping</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Customer Balance Summary Metrics */}
@@ -1568,9 +1726,9 @@ export const AdminPanel: React.FC = () => {
                 </div>
 
                 <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800">
-                  <span className="text-[10px] font-bold text-zinc-500 uppercase block">Extra Cash / Credit</span>
-                  <span className="text-xl font-extrabold text-amber-400 block">
-                    {settings.currencySymbol}{userSummary.totalExtraCash.toLocaleString('en-IN')}
+                  <span className="text-[10px] font-bold text-zinc-500 uppercase block">Available Balance / Credit</span>
+                  <span className={`text-xl font-extrabold block ${availableBalance > 0 ? 'text-emerald-400' : 'text-zinc-400'}`}>
+                    {settings.currencySymbol}{availableBalance.toLocaleString('en-IN')}
                   </span>
                 </div>
               </div>
@@ -1719,10 +1877,33 @@ export const AdminPanel: React.FC = () => {
                   </div>
                 )}
               </div>
+
+              {/* Customer Balance Audit Ledger */}
+              <div className="pt-4 border-t border-zinc-800">
+                <BalanceLedgerView
+                  transactions={userBalInfo.transactions}
+                  title="Balance & Credit Transactions History"
+                  emptyText="No credit or balance transactions recorded for this customer yet."
+                />
+              </div>
             </div>
           </div>
         );
       })()}
+
+      {/* Balance Action Modal (Pay Balance / Use Balance) */}
+      {balanceModalUser && balanceModalMode && (
+        <BalanceManagementModal
+          user={balanceModalUser}
+          mode={balanceModalMode}
+          preselectedRequestId={balanceModalPreselectedReqId}
+          onClose={() => {
+            setBalanceModalUser(null);
+            setBalanceModalMode(null);
+            setBalanceModalPreselectedReqId(undefined);
+          }}
+        />
+      )}
     </div>
   );
 };

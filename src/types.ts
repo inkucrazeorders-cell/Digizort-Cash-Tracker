@@ -131,6 +131,55 @@ export interface GroupPayment {
   notes?: string;
 }
 
+export type BalanceTransactionType =
+  | 'Balance Added'
+  | 'Balance Used'
+  | 'Balance Returned'
+  | 'Balance Paid'
+  | 'Money Requested'
+  | 'Balance Adjustment';
+
+export interface BalanceTransaction {
+  id: string;
+  userId: string;
+  userName: string;
+  userMobile: string;
+  type: BalanceTransactionType;
+  amount: number;
+  previousBalance: number;
+  remainingBalance: number;
+  date: string;
+  time: string;
+  timestamp: string;
+  relatedRequestId?: string;
+  relatedRequestTitle?: string;
+  relatedGroupPaymentId?: string;
+  relatedBalanceRequestId?: string;
+  status?: 'Completed' | 'Pending' | 'Rejected' | 'Cancelled';
+  actor: 'ADMIN' | 'USER';
+  notes?: string;
+}
+
+export type BalanceRequestStatus = 'Pending' | 'Paid' | 'Rejected' | 'Cancelled';
+
+export interface BalanceRequest {
+  id: string;
+  userId: string;
+  userName: string;
+  userMobile: string;
+  amount: number;
+  status: BalanceRequestStatus;
+  userNotes?: string;
+  adminNotes?: string;
+  date: string;
+  time: string;
+  timestamp: string;
+  processedAt?: string;
+  processedBy?: string;
+  payoutMethod?: string;
+  balanceTransactionId?: string;
+}
+
 export type Transaction = OrderRequest; // Alias for seamless compatibility
 
 export interface AppUser {
@@ -145,6 +194,7 @@ export interface AppUser {
   createdAt: string;
   lastLoginAt?: string;
   pin?: string;
+  creditBalance?: number;
 }
 
 export interface AppNotification {

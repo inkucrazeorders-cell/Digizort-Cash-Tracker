@@ -68,6 +68,46 @@
         "status": { "type": "string" },
         "notes": { "type": "string" }
       }
+    },
+    "balanceTransactions": {
+      "path": "balance_transactions/{transactionId}",
+      "fields": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userMobile": { "type": "string" },
+        "type": { "type": "string" },
+        "amount": { "type": "number" },
+        "previousBalance": { "type": "number" },
+        "remainingBalance": { "type": "number" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "relatedRequestId": { "type": "string" },
+        "relatedRequestTitle": { "type": "string" },
+        "relatedGroupPaymentId": { "type": "string" },
+        "actor": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "balanceRequests": {
+      "path": "balance_requests/{requestId}",
+      "fields": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userMobile": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string" },
+        "userNotes": { "type": "string" },
+        "adminNotes": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "processedAt": { "type": "string" },
+        "processedBy": { "type": "string" },
+        "payoutMethod": { "type": "string" }
+      }
     }
   }
 }

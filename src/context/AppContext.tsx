@@ -8,6 +8,10 @@ import {
   TimelineEvent,
   TimelineEventType,
   GroupPayment,
+  BalanceTransaction,
+  BalanceTransactionType,
+  BalanceRequest,
+  BalanceRequestStatus,
 } from '../types';
 import {
   db,
@@ -24,6 +28,7 @@ import {
   getRequestPrice,
   getRequestRemaining,
   isRequestRejected,
+  getUserAvailableBalance,
 } from '../lib/calculations';
 import confetti from 'canvas-confetti';
 
@@ -36,6 +41,7 @@ interface AppContextType {
   allUsers: AppUser[];
   notifications: AppNotification[];
   groupPayments: GroupPayment[];
+  balanceTransactions: BalanceTransaction[];
   settings: UserSettings;
 
   // Mobile Auth
@@ -66,6 +72,45 @@ interface AppContextType {
     }
   ) => Promise<void>;
   updateUserProfile: (updatedData: Partial<AppUser>) => Promise<void>;
+
+  // Balance Management
+  balanceRequests: BalanceRequest[];
+  getUserBalanceInfo: (userMobile: string, userId?: string) => {
+    availableBalance: number;
+    pendingRequestedAmount: number;
+    requestableBalance: number;
+    transactions: BalanceTransaction[];
+    balanceRequests: BalanceRequest[];
+    hasTransactions: boolean;
+    statusText: string;
+  };
+  userSubmitBalanceRequest: (params: { amount: number; userNotes?: string }) => Promise<BalanceRequest>;
+  userCancelBalanceRequest: (requestId: string) => Promise<void>;
+  adminApproveBalanceRequest: (requestId: string, adminNotes?: string, payoutMethod?: string) => Promise<void>;
+  adminRejectBalanceRequest: (requestId: string, reasonNotes: string) => Promise<void>;
+  adminPayBalance: (params: {
+    userId?: string;
+    userMobile: string;
+    userName: string;
+    amount: number;
+    notes?: string;
+  }) => Promise<void>;
+  adminUseBalance: (params: {
+    userId?: string;
+    userMobile: string;
+    userName: string;
+    amount: number;
+    relatedRequestId?: string;
+    notes?: string;
+  }) => Promise<void>;
+  adminAddBalanceAdjustment: (params: {
+    userId?: string;
+    userMobile: string;
+    userName: string;
+    amount: number;
+    type: 'Balance Added' | 'Balance Adjustment';
+    notes?: string;
+  }) => Promise<void>;
 
   // Admin Actions
   adminAcceptRequest: (requestId: string, actualPrice: number, adminNotes?: string) => Promise<void>;
@@ -141,6 +186,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [allUsers, setAllUsers] = useState<AppUser[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [groupPayments, setGroupPayments] = useState<GroupPayment[]>([]);
+  const [balanceTransactions, setBalanceTransactions] = useState<BalanceTransaction[]>([]);
+  const [balanceRequests, setBalanceRequests] = useState<BalanceRequest[]>([]);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -251,6 +298,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => unsubscribe();
   }, []);
 
+  // Real-time listener for BALANCE TRANSACTIONS from Firestore
+  useEffect(() => {
+    const btxRef = collection(db, 'balance_transactions');
+    const unsubscribe = onSnapshot(
+      btxRef,
+      (snapshot) => {
+        const fetched: BalanceTransaction[] = [];
+        snapshot.forEach((doc) => {
+          fetched.push({ id: doc.id, ...doc.data() } as BalanceTransaction);
+        });
+        fetched.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setBalanceTransactions(fetched);
+      },
+      (error) => {
+        console.error('Firestore balance_transactions listener error:', error);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  // Real-time listener for BALANCE REQUESTS from Firestore
+  useEffect(() => {
+    const bReqRef = collection(db, 'balance_requests');
+    const unsubscribe = onSnapshot(
+      bReqRef,
+      (snapshot) => {
+        const fetched: BalanceRequest[] = [];
+        snapshot.forEach((doc) => {
+          fetched.push({ id: doc.id, ...doc.data() } as BalanceRequest);
+        });
+        fetched.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        setBalanceRequests(fetched);
+      },
+      (error) => {
+        console.error('Firestore balance_requests listener error:', error);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
   // Filter requests for the current user
   const userRequests = currentUser
     ? allRequests.filter((r) => r.userMobile === currentUser.mobileNumber)
@@ -260,6 +347,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const userNotifications = currentUser
     ? notifications.filter((n) => n.targetUserMobile === 'ALL' || n.targetUserMobile === currentUser.mobileNumber)
     : notifications;
+
+  // Real-time Balance Calculation Helper
+  const getUserBalanceInfo = (userMobile: string, userId?: string) => {
+    const userReqs = allRequests.filter(
+      (r) => (userMobile && r.userMobile === userMobile) || (userId && r.userId === userId)
+    );
+    const userGps = groupPayments.filter(
+      (gp) => (userMobile && gp.userMobile === userMobile) || (userId && gp.userId === userId)
+    );
+    return getUserAvailableBalance(userMobile, userId, balanceTransactions, userReqs, userGps, balanceRequests);
+  };
 
   // MOBILE AUTH FUNCTIONS
   const checkMobileRegistered = async (mobileNumber: string): Promise<AppUser | null> => {
@@ -682,6 +780,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedAt: nowIso,
     }));
 
+    // Record Balance Added in ledger if overpaid
+    if (extraCash > 0) {
+      const balInfo = getUserBalanceInfo(req.userMobile, req.userId);
+      const prevBal = balInfo.availableBalance;
+      const newBal = prevBal + extraCash;
+      const now = new Date();
+      const bTxId = 'BTX-' + Date.now();
+      const bTx: BalanceTransaction = {
+        id: bTxId,
+        userId: req.userId || '',
+        userName: req.userName,
+        userMobile: req.userMobile,
+        type: 'Balance Added',
+        amount: extraCash,
+        previousBalance: prevBal,
+        remainingBalance: newBal,
+        date: now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+        time: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
+        timestamp: nowIso,
+        relatedRequestId: req.id,
+        relatedRequestTitle: req.productName,
+        actor: 'ADMIN',
+        notes: `Overpayment extra cash from request #${req.id}`,
+      };
+      await setDoc(doc(db, 'balance_transactions', bTxId), sanitizeForFirestore(bTx));
+      if (req.userId) {
+        await updateDoc(doc(db, 'app_users', req.userId), { creditBalance: newBal, updatedAt: nowIso });
+      }
+    }
+
     if (newRemaining === 0) {
       confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
     }
@@ -793,7 +921,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }));
     }
 
-    // 3. User notification
+    // 3. Record Balance Added in ledger if extra cash exists
+    if (extraCash > 0) {
+      const balInfo = getUserBalanceInfo(userMobile, userId);
+      const prevBal = balInfo.availableBalance;
+      const newBal = prevBal + extraCash;
+      const now = new Date();
+      const bTxId = 'BTX-' + Date.now();
+      const bTx: BalanceTransaction = {
+        id: bTxId,
+        userId: userId || '',
+        userName: userName,
+        userMobile: userMobile,
+        type: 'Balance Added',
+        amount: extraCash,
+        previousBalance: prevBal,
+        remainingBalance: newBal,
+        date: now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+        time: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
+        timestamp: nowIso,
+        relatedGroupPaymentId: groupPaymentId,
+        actor: 'ADMIN',
+        notes: `Extra cash from combined payment #${groupPaymentId}`,
+      };
+      batch.set(doc(db, 'balance_transactions', bTxId), sanitizeForFirestore(bTx));
+      if (userId) {
+        batch.update(doc(db, 'app_users', userId), { creditBalance: newBal, updatedAt: nowIso });
+      }
+    }
+
+    // 4. User notification
     const notifId = 'NOTIF-' + Date.now();
     const notifMsg = `Combined payment #${groupPaymentId} processed for ${selectedRequests.length} request(s). Received: ₹${cashReceived.toLocaleString('en-IN')}, Settled: ₹${amountSettled.toLocaleString('en-IN')}${extraCash > 0 ? `, Extra cash: ₹${extraCash.toLocaleString('en-IN')}` : ''}.`;
 
@@ -812,6 +969,561 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
     showToast(`Group Payment #${groupPaymentId} processed successfully!`);
     return groupPaymentId;
+  };
+
+  // USER BALANCE PAYOUT REQUESTS
+  const userSubmitBalanceRequest = async (params: {
+    amount: number;
+    userNotes?: string;
+  }): Promise<BalanceRequest> => {
+    if (!currentUser) {
+      throw new Error('You must be logged in to request money.');
+    }
+    const numAmount = Number(params.amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      throw new Error('Please enter a valid amount greater than ₹0.');
+    }
+
+    const balInfo = getUserBalanceInfo(currentUser.mobileNumber, currentUser.id);
+    if (numAmount > balInfo.requestableBalance) {
+      throw new Error('Requested amount cannot exceed your available balance.');
+    }
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const reqId = 'BREQ-' + Date.now();
+
+    const bReqDoc: BalanceRequest = {
+      id: reqId,
+      userId: currentUser.id,
+      userName: currentUser.fullName,
+      userMobile: currentUser.mobileNumber,
+      amount: numAmount,
+      status: 'Pending',
+      userNotes: params.userNotes ? params.userNotes.trim() : '',
+      date: dateStr,
+      time: timeStr,
+      timestamp: nowIso,
+    };
+
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'balance_requests', reqId), sanitizeForFirestore(bReqDoc));
+
+    // Also log a 'Money Requested' transaction for the user's history
+    // As per requirement:
+    // 21 Sep | Money Requested | ₹50 | ₹100 | Pending
+    const txId = 'BTX-REQ-' + Date.now();
+    const txDoc: BalanceTransaction = {
+      id: txId,
+      userId: currentUser.id,
+      userName: currentUser.fullName,
+      userMobile: currentUser.mobileNumber,
+      type: 'Money Requested',
+      amount: numAmount,
+      previousBalance: balInfo.availableBalance,
+      remainingBalance: balInfo.availableBalance, // does NOT deduct yet!
+      status: 'Pending',
+      relatedBalanceRequestId: reqId,
+      date: dateStr,
+      time: timeStr,
+      timestamp: nowIso,
+      actor: 'USER',
+      notes: params.userNotes ? `Requested: ${params.userNotes.trim()}` : 'Payout requested by user',
+    };
+    batch.set(doc(db, 'balance_transactions', txId), sanitizeForFirestore(txDoc));
+
+    // Notification for user
+    const notifId = 'NOTIF-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', notifId),
+      sanitizeForFirestore({
+        id: notifId,
+        targetUserMobile: currentUser.mobileNumber,
+        title: 'Balance Payout Requested',
+        message: `You requested ₹${numAmount.toLocaleString('en-IN')} from your balance. The admin will review and process your request.`,
+        type: 'info',
+        timestamp: nowIso,
+        read: false,
+      })
+    );
+
+    await batch.commit();
+    showToast(`Payout request for ₹${numAmount.toLocaleString('en-IN')} submitted successfully.`);
+    return bReqDoc;
+  };
+
+  const userCancelBalanceRequest = async (requestId: string): Promise<void> => {
+    if (!currentUser) throw new Error('Must be logged in to cancel.');
+    const req = balanceRequests.find((r) => r.id === requestId);
+    if (!req) throw new Error('Balance request not found.');
+    if (req.userMobile !== currentUser.mobileNumber && req.userId !== currentUser.id) {
+      throw new Error('Not authorized to cancel this request.');
+    }
+    if (req.status !== 'Pending') {
+      throw new Error('Only pending requests can be cancelled.');
+    }
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'balance_requests', requestId), {
+      status: 'Cancelled',
+      processedAt: nowIso,
+    });
+
+    const relatedTx = balanceTransactions.find((t) => t.relatedBalanceRequestId === requestId);
+    if (relatedTx) {
+      batch.update(doc(db, 'balance_transactions', relatedTx.id), {
+        status: 'Cancelled',
+      });
+    }
+
+    await batch.commit();
+    showToast('Balance payout request cancelled.');
+  };
+
+  const adminApproveBalanceRequest = async (
+    requestId: string,
+    adminNotes?: string,
+    payoutMethod?: string
+  ): Promise<void> => {
+    const req = balanceRequests.find((r) => r.id === requestId);
+    if (!req) throw new Error('Balance request not found.');
+    if (req.status !== 'Pending') {
+      throw new Error('Only pending balance requests can be marked as Paid.');
+    }
+
+    const balInfo = getUserBalanceInfo(req.userMobile, req.userId);
+    if (req.amount > balInfo.availableBalance) {
+      throw new Error(
+        `Requested amount ₹${req.amount.toLocaleString('en-IN')} exceeds customer available balance of ₹${balInfo.availableBalance.toLocaleString('en-IN')}.`
+      );
+    }
+
+    const prevBalance = balInfo.availableBalance;
+    const remainingBalance = Math.max(0, prevBalance - req.amount);
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const txId = 'BTX-PAID-' + Date.now();
+
+    const batch = writeBatch(db);
+
+    // 1. Mark request as Paid
+    batch.update(doc(db, 'balance_requests', requestId), {
+      status: 'Paid',
+      processedAt: nowIso,
+      processedBy: 'ADMIN',
+      adminNotes: adminNotes ? adminNotes.trim() : '',
+      payoutMethod: payoutMethod ? payoutMethod.trim() : 'Cash / UPI',
+      balanceTransactionId: txId,
+    });
+
+    // 2. Add 'Balance Paid' transaction to authoritative ledger
+    const txDoc: BalanceTransaction = {
+      id: txId,
+      userId: req.userId,
+      userName: req.userName,
+      userMobile: req.userMobile,
+      type: 'Balance Paid',
+      amount: req.amount,
+      previousBalance: prevBalance,
+      remainingBalance: remainingBalance,
+      status: 'Completed',
+      date: dateStr,
+      time: timeStr,
+      timestamp: nowIso,
+      relatedBalanceRequestId: req.id,
+      actor: 'ADMIN',
+      notes:
+        adminNotes ||
+        `Balance payout of ₹${req.amount.toLocaleString('en-IN')} marked as Paid by admin (${payoutMethod || 'Cash/UPI'})`,
+    };
+    batch.set(doc(db, 'balance_transactions', txId), sanitizeForFirestore(txDoc));
+
+    // Also update original 'Money Requested' transaction status if present
+    const relatedReqTx = balanceTransactions.find(
+      (t) => t.relatedBalanceRequestId === requestId && t.type === 'Money Requested'
+    );
+    if (relatedReqTx) {
+      batch.update(doc(db, 'balance_transactions', relatedReqTx.id), {
+        status: 'Completed',
+      });
+    }
+
+    // 3. Update user credit balance in app_users
+    if (req.userId) {
+      batch.update(doc(db, 'app_users', req.userId), {
+        creditBalance: remainingBalance,
+        updatedAt: nowIso,
+      });
+    }
+
+    // 4. Notification to user
+    const notifId = 'NOTIF-' + Date.now();
+    const notifMsg = `Your balance payout request of ₹${req.amount.toLocaleString('en-IN')} has been marked as Paid by admin.${
+      remainingBalance === 0
+        ? ' Balance is now fully cleared.'
+        : ` Remaining balance: ₹${remainingBalance.toLocaleString('en-IN')}.`
+    }${adminNotes ? ` Note: ${adminNotes}` : ''}`;
+
+    batch.set(
+      doc(db, 'notifications', notifId),
+      sanitizeForFirestore({
+        id: notifId,
+        targetUserMobile: req.userMobile,
+        title: 'Balance Payout Paid',
+        message: notifMsg,
+        type: 'payment_recorded',
+        timestamp: nowIso,
+        read: false,
+      })
+    );
+
+    await batch.commit();
+
+    if (remainingBalance === 0) {
+      confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+    }
+
+    showToast(
+      `Payout request #${req.id} marked as Paid. ₹${req.amount.toLocaleString('en-IN')} deducted from ${req.userName}'s balance.`
+    );
+  };
+
+  const adminRejectBalanceRequest = async (
+    requestId: string,
+    reasonNotes: string
+  ): Promise<void> => {
+    const req = balanceRequests.find((r) => r.id === requestId);
+    if (!req) throw new Error('Balance request not found.');
+    if (req.status !== 'Pending') {
+      throw new Error('Only pending balance requests can be rejected.');
+    }
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+
+    const batch = writeBatch(db);
+
+    // Update request status to Rejected (DO NOT deduct balance)
+    batch.update(doc(db, 'balance_requests', requestId), {
+      status: 'Rejected',
+      processedAt: nowIso,
+      processedBy: 'ADMIN',
+      adminNotes: reasonNotes.trim() || 'Request rejected by admin',
+    });
+
+    // Update related transaction status to Rejected
+    const relatedReqTx = balanceTransactions.find(
+      (t) => t.relatedBalanceRequestId === requestId && t.type === 'Money Requested'
+    );
+    if (relatedReqTx) {
+      batch.update(doc(db, 'balance_transactions', relatedReqTx.id), {
+        status: 'Rejected',
+        notes: `Rejected by admin: ${reasonNotes.trim() || 'No reason provided'}`,
+      });
+    }
+
+    // User notification
+    const notifId = 'NOTIF-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', notifId),
+      sanitizeForFirestore({
+        id: notifId,
+        targetUserMobile: req.userMobile,
+        title: 'Balance Request Rejected',
+        message: `Your balance request for ₹${req.amount.toLocaleString(
+          'en-IN'
+        )} was rejected by admin. Reason: ${reasonNotes.trim() || 'No reason provided'}. Your balance remains unchanged.`,
+        type: 'info',
+        timestamp: nowIso,
+        read: false,
+      })
+    );
+
+    await batch.commit();
+    showToast(`Balance request #${req.id} has been rejected.`);
+  };
+
+  const adminPayBalance = async (params: {
+    userId?: string;
+    userMobile: string;
+    userName: string;
+    amount: number;
+    notes?: string;
+  }): Promise<void> => {
+    const { userId, userMobile, userName, amount, notes } = params;
+    const numAmount = Number(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      throw new Error('Amount must be greater than ₹0.');
+    }
+    const balInfo = getUserBalanceInfo(userMobile, userId);
+    const available = balInfo.availableBalance;
+    if (numAmount > available) {
+      throw new Error(`Amount ₹${numAmount.toLocaleString('en-IN')} cannot exceed available balance of ₹${available.toLocaleString('en-IN')}.`);
+    }
+
+    const prevBalance = available;
+    const remainingBalance = Math.max(0, prevBalance - numAmount);
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const txId = 'BTX-' + Date.now();
+
+    const batch = writeBatch(db);
+
+    const txDoc: BalanceTransaction = {
+      id: txId,
+      userId: userId || '',
+      userName,
+      userMobile,
+      type: 'Balance Returned',
+      amount: numAmount,
+      previousBalance: prevBalance,
+      remainingBalance,
+      date: dateStr,
+      time: timeStr,
+      timestamp: nowIso,
+      actor: 'ADMIN',
+      notes: notes || 'Balance returned to customer by admin',
+    };
+
+    batch.set(doc(db, 'balance_transactions', txId), sanitizeForFirestore(txDoc));
+
+    if (userId) {
+      batch.update(doc(db, 'app_users', userId), {
+        creditBalance: remainingBalance,
+        updatedAt: nowIso,
+      });
+    }
+
+    // User notification
+    const notifId = 'NOTIF-' + Date.now();
+    const notifMsg = `₹${numAmount.toLocaleString('en-IN')} balance was paid/returned to you by admin.${
+      remainingBalance === 0
+        ? ' Balance is now fully cleared.'
+        : ` Remaining balance: ₹${remainingBalance.toLocaleString('en-IN')}.`
+    }${notes ? ` Note: ${notes}` : ''}`;
+
+    batch.set(doc(db, 'notifications', notifId), sanitizeForFirestore({
+      id: notifId,
+      targetUserMobile: userMobile,
+      title: remainingBalance === 0 ? 'Balance Paid & Cleared' : 'Balance Paid to You',
+      message: notifMsg,
+      type: 'payment_recorded',
+      timestamp: nowIso,
+      read: false,
+    }));
+
+    await batch.commit();
+
+    if (remainingBalance === 0) {
+      confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+    }
+
+    showToast(
+      `Balance of ₹${numAmount.toLocaleString('en-IN')} returned to ${userName}.${
+        remainingBalance === 0 ? ' (Balance Cleared)' : ` Remaining: ₹${remainingBalance.toLocaleString('en-IN')}`
+      }`
+    );
+  };
+
+  const adminUseBalance = async (params: {
+    userId?: string;
+    userMobile: string;
+    userName: string;
+    amount: number;
+    relatedRequestId?: string;
+    notes?: string;
+  }): Promise<void> => {
+    const { userId, userMobile, userName, amount, relatedRequestId, notes } = params;
+    const numAmount = Number(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      throw new Error('Amount must be greater than ₹0.');
+    }
+    const balInfo = getUserBalanceInfo(userMobile, userId);
+    const available = balInfo.availableBalance;
+    if (numAmount > available) {
+      throw new Error(`Amount ₹${numAmount.toLocaleString('en-IN')} cannot exceed available balance of ₹${available.toLocaleString('en-IN')}.`);
+    }
+
+    const prevBalance = available;
+    const remainingBalance = Math.max(0, prevBalance - numAmount);
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const txId = 'BTX-' + Date.now();
+
+    const batch = writeBatch(db);
+
+    let targetReq: OrderRequest | undefined;
+    if (relatedRequestId) {
+      targetReq = allRequests.find((r) => r.id === relatedRequestId);
+    }
+
+    const txDoc: BalanceTransaction = {
+      id: txId,
+      userId: userId || '',
+      userName,
+      userMobile,
+      type: 'Balance Used',
+      amount: numAmount,
+      previousBalance: prevBalance,
+      remainingBalance,
+      date: dateStr,
+      time: timeStr,
+      timestamp: nowIso,
+      relatedRequestId: targetReq ? targetReq.id : '',
+      relatedRequestTitle: targetReq ? targetReq.productName : '',
+      actor: 'ADMIN',
+      notes: notes || (targetReq ? `Used for order "${targetReq.productName}"` : 'Used from balance credit'),
+    };
+
+    batch.set(doc(db, 'balance_transactions', txId), sanitizeForFirestore(txDoc));
+
+    if (userId) {
+      batch.update(doc(db, 'app_users', userId), {
+        creditBalance: remainingBalance,
+        updatedAt: nowIso,
+      });
+    }
+
+    // If applied towards a specific request
+    if (targetReq) {
+      const price = getRequestPrice(targetReq);
+      const prevPaid = Number(targetReq.amountPaid) || 0;
+      const reqDue = getRequestRemaining(targetReq);
+      const allocation = Math.min(numAmount, reqDue);
+      const newPaid = prevPaid + allocation;
+      const newReqRem = Math.max(0, price - newPaid);
+      const newReqStatus: RequestStatus = newReqRem === 0 ? 'Paid' : 'Partially Paid';
+
+      const timelineEvt: TimelineEvent = {
+        id: 'EVT-' + Date.now(),
+        type: newReqRem === 0 ? 'TRANSACTION_COMPLETED' : 'PARTIAL_PAYMENT',
+        title: `Balance Credit Applied (₹${allocation.toLocaleString('en-IN')})`,
+        timestamp: nowIso,
+        amountPaidThisStep: allocation,
+        totalPaidSoFar: newPaid,
+        remainingBalance: newReqRem,
+        notes: `Used ₹${allocation.toLocaleString('en-IN')} from customer store balance credit.${notes ? ` (${notes})` : ''}`,
+        actor: 'ADMIN',
+      };
+
+      batch.update(doc(db, 'requests', targetReq.id), sanitizeForFirestore({
+        amountPaid: newPaid,
+        remainingAmount: newReqRem,
+        status: newReqStatus,
+        timeline: [...(targetReq.timeline || []), timelineEvt],
+        updatedAt: nowIso,
+      }));
+    }
+
+    // Notification
+    const notifId = 'NOTIF-' + Date.now();
+    const notifMsg = `₹${numAmount.toLocaleString('en-IN')} was deducted/used from your balance${
+      targetReq ? ` for "${targetReq.productName}"` : ''
+    }.${
+      remainingBalance === 0
+        ? ' Balance is now completely cleared.'
+        : ` Remaining balance: ₹${remainingBalance.toLocaleString('en-IN')}.`
+    }${notes ? ` Note: ${notes}` : ''}`;
+
+    batch.set(doc(db, 'notifications', notifId), sanitizeForFirestore({
+      id: notifId,
+      targetUserMobile: userMobile,
+      title: 'Balance Used',
+      message: notifMsg,
+      type: 'payment_recorded',
+      timestamp: nowIso,
+      read: false,
+    }));
+
+    await batch.commit();
+
+    if (remainingBalance === 0) {
+      confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+    }
+
+    showToast(
+      `Used ₹${numAmount.toLocaleString('en-IN')} from balance for ${userName}.${
+        remainingBalance === 0 ? ' (Balance Cleared)' : ` Remaining: ₹${remainingBalance.toLocaleString('en-IN')}`
+      }`
+    );
+  };
+
+  const adminAddBalanceAdjustment = async (params: {
+    userId?: string;
+    userMobile: string;
+    userName: string;
+    amount: number;
+    type: 'Balance Added' | 'Balance Adjustment';
+    notes?: string;
+  }): Promise<void> => {
+    const { userId, userMobile, userName, amount, type, notes } = params;
+    const numAmount = Number(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      throw new Error('Amount must be greater than ₹0.');
+    }
+    const balInfo = getUserBalanceInfo(userMobile, userId);
+    const prevBalance = balInfo.availableBalance;
+    const remainingBalance = prevBalance + numAmount;
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const txId = 'BTX-' + Date.now();
+
+    const batch = writeBatch(db);
+
+    const txDoc: BalanceTransaction = {
+      id: txId,
+      userId: userId || '',
+      userName,
+      userMobile,
+      type: type || 'Balance Added',
+      amount: numAmount,
+      previousBalance: prevBalance,
+      remainingBalance,
+      date: dateStr,
+      time: timeStr,
+      timestamp: nowIso,
+      actor: 'ADMIN',
+      notes: notes || 'Balance credited by admin',
+    };
+
+    batch.set(doc(db, 'balance_transactions', txId), sanitizeForFirestore(txDoc));
+
+    if (userId) {
+      batch.update(doc(db, 'app_users', userId), {
+        creditBalance: remainingBalance,
+        updatedAt: nowIso,
+      });
+    }
+
+    const notifId = 'NOTIF-' + Date.now();
+    const notifMsg = `₹${numAmount.toLocaleString('en-IN')} balance was added to your account credit. New balance: ₹${remainingBalance.toLocaleString('en-IN')}.${notes ? ` Note: ${notes}` : ''}`;
+
+    batch.set(doc(db, 'notifications', notifId), sanitizeForFirestore({
+      id: notifId,
+      targetUserMobile: userMobile,
+      title: 'Balance Added',
+      message: notifMsg,
+      type: 'payment_recorded',
+      timestamp: nowIso,
+      read: false,
+    }));
+
+    await batch.commit();
+
+    showToast(`Added ₹${numAmount.toLocaleString('en-IN')} balance for ${userName}. New balance: ₹${remainingBalance.toLocaleString('en-IN')}`);
   };
 
   const adminSuspendUser = async (userId: string) => {
@@ -840,6 +1552,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         allUsers,
         notifications: userNotifications,
         groupPayments,
+        balanceTransactions,
+        balanceRequests,
         settings,
         checkMobileRegistered,
         registerUser,
@@ -850,6 +1564,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userCancelRequest,
         userEditRequest,
         updateUserProfile,
+        getUserBalanceInfo,
+        userSubmitBalanceRequest,
+        userCancelBalanceRequest,
+        adminApproveBalanceRequest,
+        adminRejectBalanceRequest,
+        adminPayBalance,
+        adminUseBalance,
+        adminAddBalanceAdjustment,
         adminAcceptRequest,
         adminRejectRequest,
         adminDeleteRequest,

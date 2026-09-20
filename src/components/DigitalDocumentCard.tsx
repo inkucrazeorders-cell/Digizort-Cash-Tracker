@@ -17,6 +17,8 @@ import {
   Printer,
   Copy,
   ExternalLink,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface DigitalDocumentCardProps {
@@ -35,6 +37,10 @@ export const DigitalDocumentCard: React.FC<DigitalDocumentCardProps> = ({
   const { settings, showToast } = useApp();
   const cardRef = useRef<HTMLDivElement>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [isSendingWhatsApp, setIsSendingWhatsApp] = useState(false);
+  const [whatsAppSendStatus, setWhatsAppSendStatus] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
+  const [whatsAppErrorMessage, setWhatsAppErrorMessage] = useState<string | null>(null);
+  const [sentMessageId, setSentMessageId] = useState<string | null>(null);
 
   const formattedDate = new Date(transaction.createdAt).toLocaleDateString('en-IN', {
     day: 'numeric',
@@ -139,11 +145,57 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
     });
   };
 
-  const handleShareWhatsApp = () => {
-    const message = generateWhatsAppMessage();
-    const url = `https://wa.me/?text=${message}`;
-    window.open(url, '_blank');
-    showToast('WhatsApp share link opened!');
+  const handleShareWhatsApp = async () => {
+    if (isSendingWhatsApp) return;
+
+    const customerPhone = transaction.userMobile || transaction.phone || '';
+    if (!customerPhone) {
+      showToast('Customer WhatsApp mobile number not found.');
+      return;
+    }
+
+    // Use exact existing generated message
+    const rawMessage = decodeURIComponent(generateWhatsAppMessage());
+
+    try {
+      setIsSendingWhatsApp(true);
+      setWhatsAppSendStatus('sending');
+      setWhatsAppErrorMessage(null);
+
+      const response = await fetch('/api/whatsapp/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          to: customerPhone,
+          message: rawMessage,
+          requestId: transaction.id,
+          customerName: transaction.userName,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        setWhatsAppSendStatus('success');
+        setSentMessageId(data.messageId || 'sent');
+        showToast(`WhatsApp message automatically sent to ${transaction.userName} (${customerPhone})!`);
+      } else {
+        setWhatsAppSendStatus('error');
+        const errText = data.error || 'Failed to dispatch WhatsApp message.';
+        setWhatsAppErrorMessage(errText);
+        showToast(`WhatsApp error: ${errText}`);
+      }
+    } catch (err: any) {
+      console.error('Failed to send WhatsApp message via API:', err);
+      setWhatsAppSendStatus('error');
+      const errText = err.message || 'Connection error while communicating with WhatsApp API.';
+      setWhatsAppErrorMessage(errText);
+      showToast(`WhatsApp error: ${errText}`);
+    } finally {
+      setIsSendingWhatsApp(false);
+    }
   };
 
   const handleDownloadPNG = async () => {
@@ -437,14 +489,76 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
         {showWhatsAppShare && (
           <button
             onClick={handleShareWhatsApp}
-            className="col-span-2 sm:col-span-1 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition-all"
+            disabled={isSendingWhatsApp || whatsAppSendStatus === 'sending'}
+            className={`col-span-2 sm:col-span-1 py-2.5 px-3 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md transition-all ${
+              whatsAppSendStatus === 'success'
+                ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-600/40'
+                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'
+            }`}
             id="btn-share-whatsapp"
+            title={whatsAppSendStatus === 'success' ? `Sent: ${sentMessageId || 'Success'}. Click to send again.` : 'Send WhatsApp Message via API'}
           >
-            <MessageSquare className="w-3.5 h-3.5" />
-            <span>Share WhatsApp</span>
+            {isSendingWhatsApp ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Sending via API...</span>
+              </>
+            ) : whatsAppSendStatus === 'success' ? (
+              <>
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Sent to WhatsApp!</span>
+              </>
+            ) : (
+              <>
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>Share WhatsApp</span>
+              </>
+            )}
           </button>
         )}
       </div>
+
+      {/* WhatsApp Delivery Status Feedback */}
+      {whatsAppSendStatus === 'error' && (
+        <div className="p-3.5 rounded-2xl bg-rose-950/40 border border-rose-800/60 text-xs space-y-2 text-rose-200">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <div className="space-y-1 flex-1">
+              <span className="font-bold block text-rose-300">WhatsApp Dispatch Error</span>
+              <p className="text-[11px] text-rose-300/90 leading-relaxed font-sans">{whatsAppErrorMessage}</p>
+            </div>
+          </div>
+          <div className="flex items-center justify-between pt-1.5 border-t border-rose-900/40 text-[11px]">
+            <span className="text-zinc-400">Manual Fallback Option:</span>
+            <button
+              onClick={() => {
+                const encoded = generateWhatsAppMessage();
+                const cleanPhone = (transaction.userMobile || transaction.phone || '').replace(/\D/g, '');
+                window.open(`https://wa.me/${cleanPhone}?text=${encoded}`, '_blank');
+              }}
+              className="text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1 transition-colors"
+            >
+              <ExternalLink className="w-3 h-3" />
+              <span>Open in WhatsApp Web</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {whatsAppSendStatus === 'success' && (
+        <div className="p-2.5 rounded-2xl bg-emerald-950/40 border border-emerald-800/60 text-xs flex items-center justify-between text-emerald-300">
+          <div className="flex items-center gap-2 font-bold">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>Successfully sent to {transaction.userName} ({transaction.userMobile || transaction.phone})</span>
+          </div>
+          <button
+            onClick={() => setWhatsAppSendStatus('idle')}
+            className="text-[10px] text-zinc-400 hover:text-zinc-200 underline shrink-0"
+          >
+            Reset
+          </button>
+        </div>
+      )}
     </div>
   );
 };

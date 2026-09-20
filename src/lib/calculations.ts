@@ -1,4 +1,4 @@
-import { OrderRequest, GroupPayment } from '../types';
+import { OrderRequest, GroupPayment, BalanceTransaction, BalanceRequest } from '../types';
 
 /**
  * Returns whether a request is rejected.
@@ -208,3 +208,88 @@ export function allocatePaymentAcrossRequests(
     requestAllocations,
   };
 }
+
+/**
+ * Calculates current available balance and retrieves transaction history for a customer.
+ */
+export function getUserAvailableBalance(
+  userMobile: string,
+  userId?: string,
+  balanceTransactions: BalanceTransaction[] = [],
+  userRequests: OrderRequest[] = [],
+  groupPayments: GroupPayment[] = [],
+  balanceRequests: BalanceRequest[] = []
+): {
+  availableBalance: number;
+  pendingRequestedAmount: number;
+  requestableBalance: number;
+  transactions: BalanceTransaction[];
+  balanceRequests: BalanceRequest[];
+  hasTransactions: boolean;
+  statusText: string;
+} {
+  const userTx = balanceTransactions.filter(
+    (tx) => (userMobile && tx.userMobile === userMobile) || (userId && tx.userId === userId)
+  );
+
+  // Sort chronological ascending
+  userTx.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  // Filter user balance requests
+  const userBReqs = balanceRequests.filter(
+    (br) => (userMobile && br.userMobile === userMobile) || (userId && br.userId === userId)
+  );
+  userBReqs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()); // newest first
+
+  const pendingRequests = userBReqs.filter((br) => br.status === 'Pending');
+  const pendingRequestedAmount = pendingRequests.reduce((sum, br) => sum + (Number(br.amount) || 0), 0);
+
+  // Find the latest balance-altering transaction (exclude 'Money Requested' which doesn't alter authoritative balance)
+  const balanceAlteringTx = userTx.filter((tx) => tx.type !== 'Money Requested');
+
+  let availableBalance = 0;
+  let hasTransactions = userTx.length > 0;
+
+  if (balanceAlteringTx.length > 0) {
+    const latest = balanceAlteringTx[balanceAlteringTx.length - 1];
+    availableBalance = Math.max(0, latest.remainingBalance);
+  } else {
+    // Fallback to legacy/initial extra cash if no balance transactions have been logged yet
+    let initialExtra = 0;
+    for (const r of userRequests) {
+      if (!isRequestRejected(r) && !isRequestCancelled(r) && r.extraCash && r.extraCash > 0) {
+        initialExtra += r.extraCash;
+      }
+    }
+    for (const gp of groupPayments) {
+      if (gp.extraCash && gp.extraCash > 0) {
+        initialExtra += gp.extraCash;
+      }
+    }
+    availableBalance = initialExtra;
+  }
+
+  const requestableBalance = Math.max(0, availableBalance - pendingRequestedAmount);
+
+  let statusText = 'No Outstanding Balance';
+  if (availableBalance > 0) {
+    if (pendingRequestedAmount > 0) {
+      statusText = `Pending Request: ₹${pendingRequestedAmount}`;
+    } else {
+      statusText = 'Active Balance';
+    }
+  } else if (hasTransactions) {
+    statusText = 'Balance Cleared';
+  }
+
+  return {
+    availableBalance,
+    pendingRequestedAmount,
+    requestableBalance,
+    transactions: [...userTx].reverse(), // newest first
+    balanceRequests: userBReqs,
+    hasTransactions,
+    statusText,
+  };
+}
+

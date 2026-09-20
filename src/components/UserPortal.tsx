@@ -35,7 +35,12 @@ import {
   Mail,
   MapPin,
   X,
+  Coins,
+  ArrowDownToLine,
 } from 'lucide-react';
+import { BalanceLedgerView } from './BalanceLedgerView';
+import { RequestMoneyModal } from './RequestMoneyModal';
+import { UserBalanceRequestsList } from './UserBalanceRequestsList';
 
 export const UserPortal: React.FC = () => {
   const {
@@ -47,11 +52,13 @@ export const UserPortal: React.FC = () => {
     updateUserProfile,
     userCancelRequest,
     userEditRequest,
+    getUserBalanceInfo,
     showToast,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'requests' | 'timeline' | 'documents' | 'notifications' | 'profile'>('requests');
+  const [activeTab, setActiveTab] = useState<'requests' | 'timeline' | 'documents' | 'notifications' | 'profile' | 'balance'>('requests');
   const [isNewRequestOpen, setIsNewRequestOpen] = useState(false);
+  const [isRequestMoneyOpen, setIsRequestMoneyOpen] = useState(false);
   const [selectedReq, setSelectedReq] = useState<OrderRequest | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
@@ -228,6 +235,81 @@ export const UserPortal: React.FC = () => {
             </button>
           </div>
 
+          {/* User Store Credit & Balance Banner (When available or previously used) */}
+          {(() => {
+            const userBalInfo = getUserBalanceInfo(currentUser.mobileNumber, currentUser.id);
+            const availableBalance = userBalInfo.availableBalance;
+            const requestableBalance = userBalInfo.requestableBalance;
+
+            if (availableBalance > 0) {
+              return (
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/40 to-zinc-950 border border-emerald-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                      <Coins className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-extrabold text-emerald-400 uppercase tracking-wider">
+                          Available Store Credit / Balance
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                          Active
+                        </span>
+                      </div>
+                      <div className="text-2xl font-black text-white mt-0.5">
+                        {settings.currencySymbol}{availableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </div>
+                      <p className="text-[11px] text-zinc-400">
+                        {userBalInfo.pendingRequestedAmount > 0
+                          ? `(Pending requests: ₹${userBalInfo.pendingRequestedAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })})`
+                          : 'This balance is in your account and can be requested anytime.'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 self-start sm:self-auto shrink-0 flex-wrap">
+                    <button
+                      onClick={() => setIsRequestMoneyOpen(true)}
+                      disabled={requestableBalance <= 0}
+                      className="py-2 px-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all"
+                      id="btn-user-banner-request-money"
+                    >
+                      <ArrowDownToLine className="w-3.5 h-3.5" />
+                      <span>Request Money</span>
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('balance')}
+                      className="py-2 px-3.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white font-bold text-xs rounded-xl border border-zinc-700 flex items-center justify-center gap-1.5 transition-all"
+                      id="btn-user-view-balance-ledger"
+                    >
+                      <Coins className="w-3.5 h-3.5" />
+                      <span>View Details</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+
+            if (userBalInfo.hasTransactions && availableBalance === 0) {
+              return (
+                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 text-zinc-300">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>Store Credit Balance: <strong className="text-white">{settings.currencySymbol}0</strong> (All previous balances have been settled/cleared)</span>
+                  </div>
+                  <button
+                    onClick={() => setActiveTab('balance')}
+                    className="text-emerald-400 font-bold hover:underline shrink-0 text-xs"
+                  >
+                    View History
+                  </button>
+                </div>
+              );
+            }
+
+            return null;
+          })()}
+
           {/* Metrics Grid */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="p-4 rounded-2xl bg-zinc-950/80 border border-zinc-800/80">
@@ -283,6 +365,22 @@ export const UserPortal: React.FC = () => {
           >
             <ShoppingBag className="w-4 h-4" />
             <span>My Requests ({totalRequestsCount})</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('balance')}
+            className={`py-2 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
+              activeTab === 'balance'
+                ? 'bg-[#E53935] text-white shadow-md'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+            }`}
+            id="user-tab-balance"
+          >
+            <Coins className="w-4 h-4" />
+            <span>Credit & Balance ({getUserBalanceInfo(currentUser.mobileNumber, currentUser.id).transactions.length})</span>
+            {getUserBalanceInfo(currentUser.mobileNumber, currentUser.id).availableBalance > 0 && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            )}
           </button>
 
           <button
@@ -594,6 +692,146 @@ export const UserPortal: React.FC = () => {
           </div>
         )}
 
+        {/* TAB: CREDIT & BALANCE LEDGER */}
+        {activeTab === 'balance' && (() => {
+          const userBalInfo = getUserBalanceInfo(currentUser.mobileNumber, currentUser.id);
+          const availableBalance = userBalInfo.availableBalance;
+          const pendingRequestedAmount = userBalInfo.pendingRequestedAmount;
+          const requestableBalance = userBalInfo.requestableBalance;
+          const txs = userBalInfo.transactions;
+          const userPayoutReqs = userBalInfo.balanceRequests;
+
+          const totalAdded = txs
+            .filter((t) => t.type === 'Balance Added')
+            .reduce((sum, t) => sum + t.amount, 0);
+
+          const totalReturned = txs
+            .filter((t) => t.type === 'Balance Returned' || t.type === 'Balance Paid')
+            .reduce((sum, t) => sum + t.amount, 0);
+
+          const totalUsed = txs
+            .filter((t) => t.type === 'Balance Used')
+            .reduce((sum, t) => sum + t.amount, 0);
+
+          return (
+            <div className="space-y-6">
+              {/* Prominent Available Balance Section */}
+              <div className="p-6 rounded-3xl bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 shadow-xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <span className="text-[10px] font-extrabold uppercase tracking-widest text-emerald-400 block">
+                      USER BALANCE SECTION
+                    </span>
+                    <span className="text-xs text-zinc-400 font-medium block">
+                      Available Balance
+                    </span>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-3xl sm:text-4xl font-black text-white tracking-tight">
+                        {settings.currencySymbol}
+                        {availableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </span>
+                      {availableBalance > 0 && (
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                          Active Credit
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Request Money Action */}
+                  <div className="flex flex-col sm:items-end gap-2">
+                    <button
+                      onClick={() => setIsRequestMoneyOpen(true)}
+                      disabled={availableBalance <= 0 || requestableBalance <= 0}
+                      className="py-3 px-5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 disabled:opacity-40 disabled:pointer-events-none text-white font-extrabold text-xs rounded-2xl shadow-xl shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all"
+                      id="btn-user-request-money"
+                    >
+                      <ArrowDownToLine className="w-4 h-4" />
+                      <span>Request Money</span>
+                    </button>
+                    {pendingRequestedAmount > 0 && (
+                      <span className="text-[11px] text-amber-300 font-medium flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-amber-400" />
+                        <span>Pending Request: {settings.currencySymbol}{pendingRequestedAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Sub-card details for pending / requestable breakdown */}
+                {pendingRequestedAmount > 0 && (
+                  <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-2 text-amber-300">
+                      <Clock className="w-4 h-4 shrink-0 text-amber-400" />
+                      <span>
+                        You have <strong>{settings.currencySymbol}{pendingRequestedAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong> awaiting admin payout review.
+                      </span>
+                    </div>
+                    <div className="text-zinc-300 text-xs">
+                      Available to request now: <strong className="text-emerald-400 font-black">{settings.currencySymbol}{requestableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</strong>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Balance Summary Grid */}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="p-4 rounded-2xl bg-zinc-900/90 border border-zinc-800">
+                  <span className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
+                    Available Balance
+                  </span>
+                  <span className={`text-2xl font-black block ${availableBalance > 0 ? 'text-emerald-400' : 'text-zinc-400'}`}>
+                    {settings.currencySymbol}{availableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </span>
+                  <span className="text-[10px] text-zinc-500 mt-1 block">
+                    {availableBalance > 0 ? 'Current real-time credit' : 'All balances settled'}
+                  </span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-zinc-900/90 border border-zinc-800">
+                  <span className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
+                    Pending Requests
+                  </span>
+                  <span className={`text-2xl font-black block ${pendingRequestedAmount > 0 ? 'text-amber-400' : 'text-zinc-400'}`}>
+                    {settings.currencySymbol}{pendingRequestedAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </span>
+                  <span className="text-[10px] text-zinc-500 mt-1 block">Awaiting admin review</span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-zinc-900/90 border border-zinc-800">
+                  <span className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
+                    Total Credit Added
+                  </span>
+                  <span className="text-2xl font-black text-amber-400 block">
+                    {settings.currencySymbol}{totalAdded.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </span>
+                  <span className="text-[10px] text-zinc-500 mt-1 block">From extra payments</span>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-zinc-900/90 border border-zinc-800">
+                  <span className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
+                    Returned / Paid Back
+                  </span>
+                  <span className="text-2xl font-black text-blue-400 block">
+                    {settings.currencySymbol}{totalReturned.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </span>
+                  <span className="text-[10px] text-zinc-500 mt-1 block">Physically paid back to you</span>
+                </div>
+              </div>
+
+              {/* USER BALANCE REQUESTS LIST */}
+              <UserBalanceRequestsList requests={userPayoutReqs} />
+
+              {/* USER BALANCE HISTORY */}
+              <BalanceLedgerView
+                transactions={txs}
+                title="Account Balance History"
+                emptyText="No credit or balance transactions recorded yet for your account."
+              />
+            </div>
+          );
+        })()}
+
         {/* TAB 5: PROFILE */}
         {activeTab === 'profile' && (
           <div className="p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800/90 space-y-6 max-w-xl mx-auto">
@@ -739,6 +977,20 @@ export const UserPortal: React.FC = () => {
           onClose={() => setIsNewRequestOpen(false)}
         />
       )}
+
+      {/* Request Money Modal */}
+      {isRequestMoneyOpen && (() => {
+        const balInfo = getUserBalanceInfo(currentUser.mobileNumber, currentUser.id);
+        return (
+          <RequestMoneyModal
+            isOpen={isRequestMoneyOpen}
+            onClose={() => setIsRequestMoneyOpen(false)}
+            availableBalance={balInfo.availableBalance}
+            pendingRequestedAmount={balInfo.pendingRequestedAmount}
+            requestableBalance={balInfo.requestableBalance}
+          />
+        );
+      })()}
     </div>
   );
 };
