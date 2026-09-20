@@ -145,7 +145,36 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
     });
   };
 
-  const handleShareWhatsApp = async () => {
+  // Helper to format WhatsApp phone number with country code (default 91 for India)
+  const formatWhatsAppPhone = (phone?: string): string => {
+    if (!phone) return '';
+    let cleaned = String(phone).replace(/\D/g, '');
+    if (cleaned.startsWith('0') && cleaned.length === 11) {
+      cleaned = cleaned.slice(1);
+    }
+    if (cleaned.length === 10) {
+      cleaned = `91${cleaned}`;
+    }
+    return cleaned;
+  };
+
+  // Direct 1-Click WhatsApp Share (Universal: Works on Mobile App & Desktop Web with zero server requirements)
+  const handleDirectWhatsAppShare = () => {
+    const customerPhone = transaction.userMobile || transaction.phone || '';
+    if (!customerPhone) {
+      showToast('Customer WhatsApp mobile number not found.');
+      return;
+    }
+
+    const cleanPhone = formatWhatsAppPhone(customerPhone);
+    const encoded = generateWhatsAppMessage();
+    const url = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encoded}`;
+    window.open(url, '_blank');
+    showToast(`Opening WhatsApp chat for ${transaction.userName || customerPhone}...`);
+  };
+
+  // Automated Cloud API dispatch (Requires Meta WhatsApp Business API credentials on backend)
+  const handleCloudApiWhatsAppShare = async () => {
     if (isSendingWhatsApp) return;
 
     const customerPhone = transaction.userMobile || transaction.phone || '';
@@ -154,7 +183,6 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
       return;
     }
 
-    // Use exact existing generated message
     const rawMessage = decodeURIComponent(generateWhatsAppMessage());
 
     try {
@@ -175,6 +203,15 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
         }),
       });
 
+      // Guard against non-JSON responses (e.g. Vercel 404 HTML pages or server error pages)
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        setWhatsAppSendStatus('idle');
+        showToast('Cloud API not hosted on this domain. Opening WhatsApp directly...');
+        handleDirectWhatsAppShare();
+        return;
+      }
+
       const data = await response.json();
 
       if (response.ok && data.success) {
@@ -183,16 +220,22 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
         showToast(`WhatsApp message automatically sent to ${transaction.userName} (${customerPhone})!`);
       } else {
         setWhatsAppSendStatus('error');
-        const errText = data.error || 'Failed to dispatch WhatsApp message.';
+        const errText = data.error || 'Failed to dispatch WhatsApp message via Cloud API.';
         setWhatsAppErrorMessage(errText);
-        showToast(`WhatsApp error: ${errText}`);
+        showToast(`WhatsApp API: ${errText}`);
       }
     } catch (err: any) {
       console.error('Failed to send WhatsApp message via API:', err);
       setWhatsAppSendStatus('error');
-      const errText = err.message || 'Connection error while communicating with WhatsApp API.';
+      const isJsonSyntaxError = err?.message?.includes('JSON') || err?.name === 'SyntaxError';
+      const errText = isJsonSyntaxError
+        ? 'WhatsApp Cloud API backend is not available. Opening WhatsApp directly...'
+        : err?.message || 'Connection error while communicating with WhatsApp API.';
       setWhatsAppErrorMessage(errText);
-      showToast(`WhatsApp error: ${errText}`);
+      showToast(errText);
+      if (isJsonSyntaxError) {
+        handleDirectWhatsAppShare();
+      }
     } finally {
       setIsSendingWhatsApp(false);
     }
@@ -488,35 +531,40 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
 
         {showWhatsAppShare && (
           <button
-            onClick={handleShareWhatsApp}
-            disabled={isSendingWhatsApp || whatsAppSendStatus === 'sending'}
-            className={`col-span-2 sm:col-span-1 py-2.5 px-3 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md transition-all ${
-              whatsAppSendStatus === 'success'
-                ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-600/40'
-                : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'
-            }`}
+            onClick={handleDirectWhatsAppShare}
+            className="col-span-2 sm:col-span-1 py-2.5 px-3 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md transition-all bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20 active:scale-[0.98]"
             id="btn-share-whatsapp"
-            title={whatsAppSendStatus === 'success' ? `Sent: ${sentMessageId || 'Success'}. Click to send again.` : 'Send WhatsApp Message via API'}
+            title="Open customer chat directly in WhatsApp with prefilled statement"
           >
-            {isSendingWhatsApp ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>Sending via API...</span>
-              </>
-            ) : whatsAppSendStatus === 'success' ? (
-              <>
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Sent to WhatsApp!</span>
-              </>
-            ) : (
-              <>
-                <MessageSquare className="w-3.5 h-3.5" />
-                <span>Share WhatsApp</span>
-              </>
-            )}
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>Share WhatsApp</span>
           </button>
         )}
       </div>
+
+      {/* Optional Automated API Dispatch Trigger & Status */}
+      {showWhatsAppShare && (
+        <div className="flex items-center justify-between px-1 text-[11px] text-zinc-400">
+          <span>Direct WhatsApp share opens customer's chat with statement.</span>
+          <button
+            type="button"
+            onClick={handleCloudApiWhatsAppShare}
+            disabled={isSendingWhatsApp || whatsAppSendStatus === 'sending'}
+            className="text-zinc-400 hover:text-emerald-400 underline transition-colors disabled:opacity-50 flex items-center gap-1"
+            title="Auto-dispatch in background via Meta WhatsApp Cloud API"
+            id="btn-auto-dispatch-cloud-api"
+          >
+            {isSendingWhatsApp ? (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin text-emerald-400" />
+                <span>Sending via Bot...</span>
+              </>
+            ) : (
+              <span>Send via Cloud API Bot</span>
+            )}
+          </button>
+        </div>
+      )}
 
       {/* WhatsApp Delivery Status Feedback */}
       {whatsAppSendStatus === 'error' && (
@@ -524,22 +572,19 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
           <div className="flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
             <div className="space-y-1 flex-1">
-              <span className="font-bold block text-rose-300">WhatsApp Dispatch Error</span>
+              <span className="font-bold block text-rose-300">WhatsApp Cloud API Notice</span>
               <p className="text-[11px] text-rose-300/90 leading-relaxed font-sans">{whatsAppErrorMessage}</p>
             </div>
           </div>
           <div className="flex items-center justify-between pt-1.5 border-t border-rose-900/40 text-[11px]">
-            <span className="text-zinc-400">Manual Fallback Option:</span>
+            <span className="text-zinc-400">Direct WhatsApp Option:</span>
             <button
-              onClick={() => {
-                const encoded = generateWhatsAppMessage();
-                const cleanPhone = (transaction.userMobile || transaction.phone || '').replace(/\D/g, '');
-                window.open(`https://wa.me/${cleanPhone}?text=${encoded}`, '_blank');
-              }}
+              onClick={handleDirectWhatsAppShare}
               className="text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1 transition-colors"
+              id="btn-fallback-open-whatsapp"
             >
               <ExternalLink className="w-3 h-3" />
-              <span>Open in WhatsApp Web</span>
+              <span>Open in WhatsApp</span>
             </button>
           </div>
         </div>
