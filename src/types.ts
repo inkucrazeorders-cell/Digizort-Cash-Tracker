@@ -102,6 +102,7 @@ export interface OrderRequest {
   rejectedBy?: string;
   rejectionNote?: string;
   extraCash?: number;
+  extraCashPaid?: number;
   cashReceived?: number;
   groupPaymentId?: string;
   // Compatibility fields for transaction legacy support

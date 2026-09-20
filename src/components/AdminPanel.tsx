@@ -11,6 +11,7 @@ import {
   getRequestPrice,
   getRequestPaid,
   getRequestRemaining,
+  getRequestPendingExtraCash,
   allocatePaymentAcrossRequests,
 } from '../lib/calculations';
 import { AdminActionModal } from './AdminActionModal';
@@ -58,6 +59,7 @@ export const AdminPanel: React.FC = () => {
     allUsers,
     groupPayments,
     balanceRequests,
+    balanceTransactions,
     settings,
     logoutUser,
     adminSuspendUser,
@@ -113,8 +115,8 @@ export const AdminPanel: React.FC = () => {
   const activeRequests = allRequests.filter((r) => !isRequestRejected(r));
   const rejectedRequests = allRequests.filter((r) => isRequestRejected(r));
 
-  // Stats calculation via calculations.ts (strictly separates rejected requests)
-  const statsSummary = calculateAccountSummary(allRequests, groupPayments);
+  // Stats calculation via calculations.ts (strictly separates rejected requests and accounts for balance transactions)
+  const statsSummary = calculateAccountSummary(allRequests, groupPayments, balanceTransactions);
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const todayRequestsCount = activeRequests.filter(
@@ -485,16 +487,20 @@ export const AdminPanel: React.FC = () => {
 
               <div className="p-6 rounded-3xl bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-zinc-400 uppercase">Extra Cash Received</span>
-                  <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400">
+                  <span className="text-xs font-bold text-zinc-400 uppercase">Extra Cash Pending to Pay</span>
+                  <div className={`p-2 rounded-xl ${totalExtraCash > 0 ? 'bg-amber-500/20 text-amber-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
                     <Coins className="w-4 h-4" />
                   </div>
                 </div>
-                <span className="text-3xl font-extrabold text-amber-400 block">
+                <span className={`text-3xl font-extrabold block ${totalExtraCash > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
                   {settings.currencySymbol}
                   {totalExtraCash.toLocaleString('en-IN')}
                 </span>
-                <p className="text-[11px] text-zinc-500">Overpayments / extra cash recorded</p>
+                <p className="text-[11px] text-zinc-500">
+                  {totalExtraCash > 0
+                    ? `Active balance owed to customer${statsSummary.totalExtraCashReturned ? ` • Paid: ${settings.currencySymbol}${statsSummary.totalExtraCashReturned.toLocaleString('en-IN')}` : ''}`
+                    : (statsSummary.totalExtraCashReturned ? `All extra cash cleared • Total paid: ${settings.currencySymbol}${statsSummary.totalExtraCashReturned.toLocaleString('en-IN')}` : 'No active overpayments')}
+                </p>
               </div>
 
               <div className="p-6 rounded-3xl bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 space-y-2">
@@ -623,11 +629,30 @@ export const AdminPanel: React.FC = () => {
                             {req.userName} ({req.userMobile})
                           </span>
                           {getStatusBadge(req.status)}
-                          {req.extraCash && req.extraCash > 0 ? (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                              Extra Cash: {settings.currencySymbol}{req.extraCash.toLocaleString('en-IN')}
-                            </span>
-                          ) : null}
+                          {(() => {
+                            const userBal = getUserBalanceInfo(req.userMobile, req.userId);
+                            const pendingExtra = getRequestPendingExtraCash(req);
+                            if (userBal.availableBalance === 0 && (userBal.hasTransactions || req.extraCashPaid)) {
+                              return (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                                  Extra Cash: Cleared
+                                </span>
+                              );
+                            }
+                            if (pendingExtra > 0 || (userBal.availableBalance > 0 && req.extraCash)) {
+                              const displayAmt = Math.min(
+                                pendingExtra > 0 ? pendingExtra : userBal.availableBalance,
+                                userBal.availableBalance > 0 ? userBal.availableBalance : pendingExtra
+                              );
+                              return (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                  Extra Cash Pending: {settings.currencySymbol}{displayAmt.toLocaleString('en-IN')}
+                                  {req.extraCashPaid ? ` (Paid: ${settings.currencySymbol}${req.extraCashPaid.toLocaleString('en-IN')})` : ''}
+                                </span>
+                              );
+                            }
+                            return null;
+                          })()}
                         </div>
 
                         <p className="text-xs text-zinc-300">{req.purpose}</p>
@@ -709,9 +734,12 @@ export const AdminPanel: React.FC = () => {
                                 setSelectedReq(req);
                                 setModalAction('payment');
                               }}
-                              className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl transition-colors"
+                              className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-md shadow-emerald-600/20 transition-all flex items-center gap-1.5 active:scale-[0.98]"
+                              id={`btn-mark-paid-cash-list-${req.id}`}
+                              title={`Mark balance of ${settings.currencySymbol}${rem.toLocaleString('en-IN')} as paid in cash`}
                             >
-                              Record Payment
+                              <DollarSign className="w-3.5 h-3.5" />
+                              <span>Mark Paid (Cash)</span>
                             </button>
                           )}
 
@@ -1363,7 +1391,10 @@ export const AdminPanel: React.FC = () => {
                   const userReqs = allRequests.filter(
                     (r) => r.userMobile === usr.mobileNumber || r.userId === usr.id
                   );
-                  const userSummary = calculateAccountSummary(userReqs);
+                  const userTxs = balanceTransactions.filter(
+                    (t) => t.userMobile === usr.mobileNumber || t.userId === usr.id
+                  );
+                  const userSummary = calculateAccountSummary(userReqs, [], userTxs);
 
                   return (
                     <div
@@ -1466,9 +1497,20 @@ export const AdminPanel: React.FC = () => {
                           if (userSummary.totalExtraCash > 0) {
                             return (
                               <div className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-[11px]">
-                                <span className="text-amber-400 font-bold">Extra Cash:</span>
+                                <span className="text-amber-400 font-bold">Extra Cash Pending:</span>
                                 <span className="text-amber-300 font-extrabold">
                                   {settings.currencySymbol}{userSummary.totalExtraCash.toLocaleString('en-IN')}
+                                </span>
+                              </div>
+                            );
+                          }
+
+                          if (userSummary.totalExtraCash === 0 && userSummary.totalExtraCashReturned && userSummary.totalExtraCashReturned > 0) {
+                            return (
+                              <div className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between text-[11px]">
+                                <span className="text-emerald-400 font-bold">Extra Cash:</span>
+                                <span className="text-emerald-300 font-extrabold">
+                                  Paid & Cleared ({settings.currencySymbol}{userSummary.totalExtraCashReturned.toLocaleString('en-IN')})
                                 </span>
                               </div>
                             );
@@ -1618,7 +1660,16 @@ export const AdminPanel: React.FC = () => {
               </p>
             </div>
 
-            <DigitalDocumentCard transaction={inspectDocReq} showWhatsAppShare={true} />
+            <DigitalDocumentCard
+              transaction={inspectDocReq}
+              showWhatsAppShare={true}
+              onClose={() => setInspectDocReq(null)}
+              onOpenRecordPayment={() => {
+                setSelectedReq(inspectDocReq);
+                setModalAction('payment');
+                setInspectDocReq(null);
+              }}
+            />
           </div>
         </div>
       )}
@@ -1628,7 +1679,10 @@ export const AdminPanel: React.FC = () => {
         const userAllReqs = allRequests.filter(
           (r) => r.userMobile === selectedUserDetail.mobileNumber || r.userId === selectedUserDetail.id
         );
-        const userSummary = calculateAccountSummary(userAllReqs);
+        const userTxs = balanceTransactions.filter(
+          (t) => t.userMobile === selectedUserDetail.mobileNumber || t.userId === selectedUserDetail.id
+        );
+        const userSummary = calculateAccountSummary(userAllReqs, [], userTxs);
         const userBalInfo = getUserBalanceInfo(selectedUserDetail.mobileNumber, selectedUserDetail.id);
         const availableBalance = userBalInfo.availableBalance;
 
@@ -1772,11 +1826,29 @@ export const AdminPanel: React.FC = () => {
                               <span className="font-extrabold text-white text-sm">{r.productName}</span>
                               <span className="text-[10px] text-zinc-500 font-mono">#{r.id}</span>
                               {getStatusBadge(r.status)}
-                              {r.extraCash && r.extraCash > 0 ? (
-                                <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40">
-                                  Extra Cash: {settings.currencySymbol}{r.extraCash}
-                                </span>
-                              ) : null}
+                              {(() => {
+                                const userBal = getUserBalanceInfo(r.userMobile, r.userId);
+                                const pendingExtra = getRequestPendingExtraCash(r);
+                                if (userBal.availableBalance === 0 && (userBal.hasTransactions || r.extraCashPaid)) {
+                                  return (
+                                    <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                                      Extra Cash: Cleared
+                                    </span>
+                                  );
+                                }
+                                if (pendingExtra > 0 || (userBal.availableBalance > 0 && r.extraCash)) {
+                                  const displayAmt = Math.min(
+                                    pendingExtra > 0 ? pendingExtra : userBal.availableBalance,
+                                    userBal.availableBalance > 0 ? userBal.availableBalance : pendingExtra
+                                  );
+                                  return (
+                                    <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                      Extra Cash Pending: {settings.currencySymbol}{displayAmt.toLocaleString('en-IN')}
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()}
                             </div>
                             <p className="text-[11px] text-zinc-400">{r.purpose}</p>
                             {isRejected && (
@@ -1835,9 +1907,12 @@ export const AdminPanel: React.FC = () => {
                                     setSelectedReq(r);
                                     setModalAction('payment');
                                   }}
-                                  className="py-1 px-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] rounded-lg"
+                                  className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-[11px] rounded-lg shadow-sm flex items-center gap-1 active:scale-[0.98]"
+                                  id={`btn-user-pay-cash-${r.id}`}
+                                  title="Mark paid in cash"
                                 >
-                                  Pay
+                                  <DollarSign className="w-3 h-3" />
+                                  <span>Paid Cash</span>
                                 </button>
                               )}
 

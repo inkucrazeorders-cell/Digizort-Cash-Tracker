@@ -307,20 +307,35 @@ export const AdminBalanceRequestsView: React.FC = () => {
                   </div>
 
                   {/* Right Column: Actions */}
-                  <div className="flex items-center gap-2.5 justify-end shrink-0">
+                  <div className="flex items-center gap-2 justify-end shrink-0 flex-wrap">
                     {isPending ? (
                       <>
+                        <button
+                          onClick={() => {
+                            setApproveModalReq(req);
+                            setPayoutMethod('Cash');
+                            setAdminPayoutNote('Paid user balance in cash');
+                          }}
+                          className="py-2.5 px-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 transition-all active:scale-[0.98]"
+                          id={`btn-admin-pay-cash-req-${req.id}`}
+                          title="Mark that you paid this user balance in cash"
+                        >
+                          <DollarSign className="w-4 h-4" />
+                          <span>Mark Paid (Cash)</span>
+                        </button>
+
                         <button
                           onClick={() => {
                             setApproveModalReq(req);
                             setPayoutMethod('UPI');
                             setAdminPayoutNote('');
                           }}
-                          className="py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 transition-all"
+                          className="py-2.5 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 font-bold text-xs flex items-center gap-1.5 transition-all"
                           id={`btn-admin-pay-req-${req.id}`}
+                          title="Pay via UPI, Bank or other methods"
                         >
-                          <Check className="w-4 h-4" />
-                          <span>Mark as Paid</span>
+                          <Check className="w-3.5 h-3.5 text-blue-400" />
+                          <span>Other / UPI</span>
                         </button>
 
                         <button
@@ -328,10 +343,10 @@ export const AdminBalanceRequestsView: React.FC = () => {
                             setRejectModalReq(req);
                             setRejectionReason('');
                           }}
-                          className="py-2.5 px-3.5 rounded-xl bg-zinc-800 hover:bg-rose-500/20 text-zinc-300 hover:text-rose-400 border border-zinc-700 hover:border-rose-500/40 font-bold text-xs flex items-center gap-1.5 transition-all"
+                          className="py-2.5 px-3 rounded-xl bg-zinc-800 hover:bg-rose-500/20 text-zinc-300 hover:text-rose-400 border border-zinc-700 hover:border-rose-500/40 font-bold text-xs flex items-center gap-1.5 transition-all"
                           id={`btn-admin-reject-req-${req.id}`}
                         >
-                          <X className="w-4 h-4" />
+                          <X className="w-3.5 h-3.5" />
                           <span>Reject</span>
                         </button>
                       </>
@@ -423,18 +438,24 @@ export const AdminBalanceRequestsView: React.FC = () => {
                   Payment Method Used:
                 </label>
                 <div className="grid grid-cols-3 gap-2">
-                  {['UPI', 'Cash', 'Bank Transfer', 'GPay', 'PhonePe', 'Other'].map((method) => (
+                  {['Cash', 'UPI', 'Bank Transfer', 'GPay', 'PhonePe', 'Other'].map((method) => (
                     <button
                       key={method}
                       type="button"
-                      onClick={() => setPayoutMethod(method)}
-                      className={`py-2 px-2.5 rounded-xl text-xs font-bold transition-all ${
+                      onClick={() => {
+                        setPayoutMethod(method);
+                        if (method === 'Cash' && !adminPayoutNote) {
+                          setAdminPayoutNote('Paid user balance in cash');
+                        }
+                      }}
+                      className={`py-2 px-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1 ${
                         payoutMethod === method
                           ? 'bg-emerald-600 text-white shadow-md'
                           : 'bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800'
                       }`}
                     >
-                      {method}
+                      {method === 'Cash' && <DollarSign className="w-3.5 h-3.5" />}
+                      <span>{method}</span>
                     </button>
                   ))}
                 </div>
@@ -479,7 +500,11 @@ export const AdminBalanceRequestsView: React.FC = () => {
                   className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 transition-all"
                   id="btn-confirm-approve-payout"
                 >
-                  {isApproving ? 'Processing...' : 'Confirm & Mark as Paid'}
+                  {isApproving
+                    ? 'Processing...'
+                    : payoutMethod === 'Cash'
+                    ? `Confirm Paid in Cash (${settings.currencySymbol}${approveModalReq.amount.toLocaleString('en-IN')})`
+                    : 'Confirm & Mark as Paid'}
                 </button>
               </div>
             </div>

@@ -25,16 +25,18 @@ export default async function handler(req: Request, res: Response) {
   }
 
   const hasToken = !!process.env.WHATSAPP_API_TOKEN || !!process.env.WHATSAPP_ACCESS_TOKEN;
-  const hasPhoneId = !!process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const hasBusinessAccountId = !!process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '496013146934162';
+  const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '507742449083763';
   const senderNumber = process.env.WHATSAPP_SENDER_NUMBER || '+91 8129043397';
   const apiVersion = process.env.WHATSAPP_API_VERSION || 'v26.0';
 
   return sendJsonResponse(res, 200, {
-    configured: hasToken && hasPhoneId,
+    configured: hasToken && !!phoneNumberId,
     hasToken,
-    hasPhoneId,
-    hasBusinessAccountId,
+    hasPhoneId: !!phoneNumberId,
+    phoneNumberId,
+    hasBusinessAccountId: !!businessAccountId,
+    businessAccountId,
     senderNumber,
     apiVersion,
     platform: 'vercel',

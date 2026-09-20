@@ -9,6 +9,7 @@ import {
   getRequestPrice,
   getRequestRemaining,
   getRequestPaid,
+  getRequestPendingExtraCash,
 } from '../lib/calculations';
 import { NewRequestModal } from './NewRequestModal';
 import { DigitalDocumentCard } from './DigitalDocumentCard';
@@ -47,6 +48,7 @@ export const UserPortal: React.FC = () => {
     currentUser,
     userRequests,
     notifications,
+    balanceTransactions,
     settings,
     logoutUser,
     updateUserProfile,
@@ -93,8 +95,11 @@ export const UserPortal: React.FC = () => {
     return true;
   });
 
-  // Calculate user metrics using centralized helper (strictly excludes rejected requests)
-  const userSummary = calculateAccountSummary(userRequests);
+  // Calculate user metrics using centralized helper (strictly excludes rejected requests and includes balance transactions)
+  const userTxs = balanceTransactions.filter(
+    (t) => t.userMobile === currentUser.mobileNumber || t.userId === currentUser.id
+  );
+  const userSummary = calculateAccountSummary(userRequests, [], userTxs);
   const totalRequestsCount = nonRejectedUserRequests.length;
   const pendingRequestsCount = nonRejectedUserRequests.filter(
     (r) =>
@@ -542,11 +547,29 @@ export const UserPortal: React.FC = () => {
                           <span className="text-sm font-extrabold text-white block">
                             Paid: {settings.currencySymbol}{paid.toLocaleString('en-IN')}
                           </span>
-                          {req.extraCash && req.extraCash > 0 ? (
-                            <span className="text-[10px] font-extrabold text-amber-400 block">
-                              Extra Cash: {settings.currencySymbol}{req.extraCash.toLocaleString('en-IN')}
-                            </span>
-                          ) : null}
+                          {(() => {
+                            const userBal = getUserBalanceInfo(currentUser.mobileNumber, currentUser.id);
+                            const pendingExtra = getRequestPendingExtraCash(req);
+                            if (userBal.availableBalance === 0 && (userBal.hasTransactions || req.extraCashPaid)) {
+                              return (
+                                <span className="text-[10px] font-extrabold text-emerald-400 block">
+                                  Extra Cash: Cleared
+                                </span>
+                              );
+                            }
+                            if (pendingExtra > 0 || (userBal.availableBalance > 0 && req.extraCash)) {
+                              const displayAmt = Math.min(
+                                pendingExtra > 0 ? pendingExtra : userBal.availableBalance,
+                                userBal.availableBalance > 0 ? userBal.availableBalance : pendingExtra
+                              );
+                              return (
+                                <span className="text-[10px] font-extrabold text-amber-400 block">
+                                  Extra Cash Pending: {settings.currencySymbol}{displayAmt.toLocaleString('en-IN')}
+                                </span>
+                              );
+                            }
+                            return null;
+                          })()}
                           {rem > 0 && (
                             <span className="text-[10px] font-bold text-rose-400 block">
                               Due: {settings.currencySymbol}{rem.toLocaleString('en-IN')}

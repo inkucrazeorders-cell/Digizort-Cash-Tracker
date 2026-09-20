@@ -102,8 +102,8 @@ export default async function handler(req: Request, res: Response) {
     }
 
     const token = process.env.WHATSAPP_API_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-    const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '496013146934162';
+    const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '507742449083763';
     const senderNumber = process.env.WHATSAPP_SENDER_NUMBER || '+91 8129043397';
     // API version configured to v26.0 as required
     const apiVersion = process.env.WHATSAPP_API_VERSION || 'v26.0';
@@ -165,17 +165,29 @@ export default async function handler(req: Request, res: Response) {
     console.log(`[WhatsApp API Serverless] Meta API HTTP ${statusCode} response:`, JSON.stringify(data));
 
     if (!metaResponse.ok) {
-      const errorMsg =
+      let errorMsg =
         data?.error?.message ||
         data?.error?.error_data?.details ||
         `WhatsApp Cloud API returned error (HTTP ${statusCode})`;
-      const details = data?.error?.error_user_msg || data?.error?.details || JSON.stringify(data?.error || data);
+      let details = data?.error?.error_user_msg || data?.error?.details || JSON.stringify(data?.error || data);
+
+      const isUnregistered =
+        data?.error?.code === 133010 ||
+        errorMsg.includes('133010') ||
+        errorMsg.includes('Account not registered');
+
+      if (isUnregistered) {
+        errorMsg = 'Sender number (+91 8129043397) is active on WhatsApp Business Mobile App.';
+        details = 'Meta Cloud API requires 2-step PIN registration, OR you can send directly via your WhatsApp app with 1 tap.';
+      }
 
       const httpCode = statusCode >= 400 && statusCode < 500 ? statusCode : 502;
       return sendJsonResponse(res, httpCode, {
         success: false,
         error: errorMsg,
+        code: data?.error?.code,
         details: details,
+        isUnregistered,
       });
     }
 

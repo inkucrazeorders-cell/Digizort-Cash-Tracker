@@ -19,16 +19,18 @@ async function startServer() {
   app.get('/api/whatsapp/status', (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     const hasToken = !!process.env.WHATSAPP_API_TOKEN || !!process.env.WHATSAPP_ACCESS_TOKEN;
-    const hasPhoneId = !!process.env.WHATSAPP_PHONE_NUMBER_ID;
-    const hasBusinessAccountId = !!process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '496013146934162';
+    const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '507742449083763';
     const senderNumber = process.env.WHATSAPP_SENDER_NUMBER || '+91 8129043397';
     const apiVersion = process.env.WHATSAPP_API_VERSION || 'v26.0';
 
     res.json({
-      configured: hasToken && hasPhoneId,
+      configured: hasToken && !!phoneNumberId,
       hasToken,
-      hasPhoneId,
-      hasBusinessAccountId,
+      hasPhoneId: !!phoneNumberId,
+      phoneNumberId,
+      hasBusinessAccountId: !!businessAccountId,
+      businessAccountId,
       senderNumber,
       apiVersion,
       platform: 'express',
@@ -67,8 +69,8 @@ async function startServer() {
       }
 
       const token = process.env.WHATSAPP_API_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN;
-      const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-      const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+      const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '496013146934162';
+      const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '507742449083763';
       const senderNumber = process.env.WHATSAPP_SENDER_NUMBER || '+91 8129043397';
       const apiVersion = process.env.WHATSAPP_API_VERSION || 'v26.0';
 
@@ -129,16 +131,28 @@ async function startServer() {
       console.log(`[WhatsApp API Server] Meta API HTTP ${statusCode} response:`, JSON.stringify(data));
 
       if (!metaResponse.ok) {
-        const errorMsg =
+        let errorMsg =
           data?.error?.message ||
           data?.error?.error_data?.details ||
           `WhatsApp Cloud API returned error (HTTP ${statusCode})`;
-        const details = data?.error?.error_user_msg || data?.error?.details || JSON.stringify(data?.error || data);
+        let details = data?.error?.error_user_msg || data?.error?.details || JSON.stringify(data?.error || data);
+
+        const isUnregistered =
+          data?.error?.code === 133010 ||
+          errorMsg.includes('133010') ||
+          errorMsg.includes('Account not registered');
+
+        if (isUnregistered) {
+          errorMsg = 'Sender number (+91 8129043397) is active on WhatsApp Business Mobile App.';
+          details = 'Meta Cloud API requires 2-step PIN registration, OR you can send directly via your WhatsApp app with 1 tap.';
+        }
 
         return res.status(statusCode >= 400 && statusCode < 500 ? statusCode : 502).json({
           success: false,
           error: errorMsg,
+          code: data?.error?.code,
           details: details,
+          isUnregistered,
         });
       }
 
@@ -159,6 +173,59 @@ async function startServer() {
         success: false,
         error: 'WhatsApp API error',
         details: err?.message || 'Server error occurred while dispatching WhatsApp message.',
+      });
+    }
+  });
+
+  // Register phone number with WhatsApp Cloud API using 6-digit PIN
+  app.post('/api/whatsapp/register', async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    try {
+      const { pin } = req.body || {};
+      if (!pin || String(pin).length !== 6) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid PIN',
+          details: 'A 6-digit numeric PIN is required for WhatsApp Cloud API registration.',
+        });
+      }
+
+      const token = process.env.WHATSAPP_API_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN;
+      const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '496013146934162';
+      const apiVersion = process.env.WHATSAPP_API_VERSION || 'v26.0';
+
+      const metaUrl = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/register`;
+      const response = await fetch(metaUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          pin: String(pin),
+        }),
+      });
+
+      const data: any = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        return res.status(response.status).json({
+          success: false,
+          error: data?.error?.message || 'Failed to register with WhatsApp Cloud API',
+          details: data?.error?.error_user_msg || data?.error?.details || JSON.stringify(data?.error || data),
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: 'Phone number successfully registered with WhatsApp Cloud API!',
+        data,
+      });
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        error: 'Registration error',
+        details: err?.message || 'Server error during registration.',
       });
     }
   });

@@ -94,6 +94,7 @@ interface AppContextType {
     userName: string;
     amount: number;
     notes?: string;
+    relatedRequestId?: string;
   }) => Promise<void>;
   adminUseBalance: (params: {
     userId?: string;
@@ -1163,7 +1164,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
 
-    // 4. Notification to user
+    // 4. Deduct paid amount from customer's request(s) with pending extra cash
+    let remainingDeductForReq = req.amount;
+    const userReqsWithExtra = allRequests
+      .filter(
+        (r) =>
+          ((req.userMobile && r.userMobile === req.userMobile) ||
+            (req.userId && r.userId === req.userId)) &&
+          (r.extraCash || 0) > 0
+      )
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    for (const r of userReqsWithExtra) {
+      if (remainingDeductForReq <= 0) break;
+      const currentExtra = r.extraCash || 0;
+      const deduct = Math.min(currentExtra, remainingDeductForReq);
+      const newExtra = Math.max(0, currentExtra - deduct);
+      const newExtraPaid = (r.extraCashPaid || 0) + deduct;
+      remainingDeductForReq -= deduct;
+
+      const timelineEvt: TimelineEvent = {
+        id: 'EVT-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+        type: 'PARTIAL_PAYMENT',
+        title: newExtra === 0 ? 'Extra Cash Fully Returned/Paid' : 'Extra Cash Paid to Customer',
+        timestamp: nowIso,
+        amountPaidThisStep: deduct,
+        totalPaidSoFar: r.amountPaid,
+        remainingBalance: r.remainingAmount,
+        notes: `Balance payout of ₹${deduct.toLocaleString('en-IN')} approved and marked as Paid.${
+          newExtra === 0
+            ? ' Extra cash is now cleared.'
+            : ` Remaining extra cash: ₹${newExtra.toLocaleString('en-IN')}.`
+        }`,
+        actor: 'ADMIN',
+      };
+
+      batch.update(doc(db, 'requests', r.id), {
+        extraCash: newExtra,
+        extraCashPaid: newExtraPaid,
+        timeline: [...(r.timeline || []), timelineEvt],
+        updatedAt: nowIso,
+      });
+    }
+
+    // 5. Notification to user
     const notifId = 'NOTIF-' + Date.now();
     const notifMsg = `Your balance payout request of ₹${req.amount.toLocaleString('en-IN')} has been marked as Paid by admin.${
       remainingBalance === 0
@@ -1256,8 +1300,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     userName: string;
     amount: number;
     notes?: string;
+    relatedRequestId?: string;
   }): Promise<void> => {
-    const { userId, userMobile, userName, amount, notes } = params;
+    const { userId, userMobile, userName, amount, notes, relatedRequestId } = params;
     const numAmount = Number(amount);
     if (isNaN(numAmount) || numAmount <= 0) {
       throw new Error('Amount must be greater than ₹0.');
@@ -1290,6 +1335,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date: dateStr,
       time: timeStr,
       timestamp: nowIso,
+      relatedRequestId: relatedRequestId || undefined,
       actor: 'ADMIN',
       notes: notes || 'Balance returned to customer by admin',
     };
@@ -1299,6 +1345,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (userId) {
       batch.update(doc(db, 'app_users', userId), {
         creditBalance: remainingBalance,
+        updatedAt: nowIso,
+      });
+    }
+
+    // Deduct paid amount from customer's request(s) with pending extra cash
+    let remainingDeductForReq = numAmount;
+    const userReqsWithExtra = allRequests
+      .filter(
+        (r) =>
+          ((userMobile && r.userMobile === userMobile) ||
+            (userId && r.userId === userId)) &&
+          (r.extraCash || 0) > 0
+      )
+      .sort((a, b) => {
+        if (relatedRequestId) {
+          if (a.id === relatedRequestId) return -1;
+          if (b.id === relatedRequestId) return 1;
+        }
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      });
+
+    for (const r of userReqsWithExtra) {
+      if (remainingDeductForReq <= 0) break;
+      const currentExtra = r.extraCash || 0;
+      const deduct = Math.min(currentExtra, remainingDeductForReq);
+      const newExtra = Math.max(0, currentExtra - deduct);
+      const newExtraPaid = (r.extraCashPaid || 0) + deduct;
+      remainingDeductForReq -= deduct;
+
+      const timelineEvt: TimelineEvent = {
+        id: 'EVT-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+        type: 'PARTIAL_PAYMENT',
+        title: newExtra === 0 ? 'Extra Cash Fully Returned/Paid' : 'Extra Cash Paid to Customer',
+        timestamp: nowIso,
+        amountPaidThisStep: deduct,
+        totalPaidSoFar: r.amountPaid,
+        remainingBalance: r.remainingAmount,
+        notes: `Paid ₹${deduct.toLocaleString('en-IN')} cash balance to customer.${
+          newExtra === 0
+            ? ' Extra cash is now cleared.'
+            : ` Remaining extra cash: ₹${newExtra.toLocaleString('en-IN')}.`
+        }`,
+        actor: 'ADMIN',
+      };
+
+      batch.update(doc(db, 'requests', r.id), {
+        extraCash: newExtra,
+        extraCashPaid: newExtraPaid,
+        timeline: [...(r.timeline || []), timelineEvt],
         updatedAt: nowIso,
       });
     }

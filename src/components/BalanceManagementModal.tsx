@@ -52,6 +52,8 @@ export const BalanceManagementModal: React.FC<BalanceManagementModalProps> = ({
   });
 
   const [selectedReqId, setSelectedReqId] = useState<string>(preselectedRequestId || '');
+  const [payoutMethod, setPayoutMethod] = useState<'Cash' | 'UPI' | 'Bank'>('Cash');
+  const [allowManualOverride, setAllowManualOverride] = useState<boolean>(false);
   const [amountInput, setAmountInput] = useState<string>(() => {
     if (mode === 'pay') {
       return String(availableBalance > 0 ? availableBalance : '');
@@ -69,14 +71,14 @@ export const BalanceManagementModal: React.FC<BalanceManagementModalProps> = ({
     return '';
   });
 
-  const [notes, setNotes] = useState<string>('');
+  const [notes, setNotes] = useState<string>(() => (mode === 'pay' ? 'Paid user balance in cash' : ''));
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const numAmount = Number(amountInput) || 0;
-  const isValidAmount = numAmount > 0 && numAmount <= availableBalance;
+  const isValidAmount = numAmount > 0 && (allowManualOverride || numAmount <= availableBalance);
   const remainingBalance = Math.max(0, availableBalance - numAmount);
-  const isClearingBalance = isValidAmount && remainingBalance === 0;
+  const isClearingBalance = isValidAmount && !allowManualOverride && remainingBalance === 0;
 
   // Handler when a request is selected in "Use Balance" mode
   const handleSelectRequest = (reqId: string) => {
@@ -101,7 +103,7 @@ export const BalanceManagementModal: React.FC<BalanceManagementModalProps> = ({
       return;
     }
 
-    if (numAmount > availableBalance) {
+    if (!allowManualOverride && numAmount > availableBalance) {
       setErrorMessage(
         `Entered amount (₹${numAmount.toLocaleString('en-IN')}) cannot exceed available balance of ₹${availableBalance.toLocaleString('en-IN')}.`
       );
@@ -112,12 +114,18 @@ export const BalanceManagementModal: React.FC<BalanceManagementModalProps> = ({
       setIsSubmitting(true);
 
       if (mode === 'pay') {
+        const finalNotes = notes.trim()
+          ? `${notes.trim()}${payoutMethod === 'Cash' && !notes.toLowerCase().includes('cash') ? ' (Cash)' : ''}`
+          : payoutMethod === 'Cash'
+          ? 'Paid user balance in cash'
+          : undefined;
+
         await adminPayBalance({
           userId: user.id,
           userMobile: user.mobileNumber,
           userName: user.fullName,
           amount: numAmount,
-          notes: notes.trim() || undefined,
+          notes: finalNotes,
         });
       } else if (mode === 'use') {
         await adminUseBalance({
@@ -162,7 +170,7 @@ export const BalanceManagementModal: React.FC<BalanceManagementModalProps> = ({
               </div>
               <div>
                 <h3 className="text-base sm:text-lg font-extrabold text-white">
-                  {mode === 'pay' ? 'Pay Customer Balance' : 'Use Balance Credit'}
+                  {mode === 'pay' ? 'Pay Customer Balance (Cash / Refund)' : 'Use Balance Credit'}
                 </h3>
                 <p className="text-xs text-zinc-400">
                   Customer: <span className="text-white font-bold">{user.fullName}</span> (
@@ -205,24 +213,66 @@ export const BalanceManagementModal: React.FC<BalanceManagementModalProps> = ({
             </div>
           </div>
 
-          {availableBalance <= 0 ? (
+          {availableBalance <= 0 && !allowManualOverride ? (
             <div className="p-6 text-center bg-zinc-950/60 rounded-2xl border border-zinc-800 space-y-3">
               <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto" />
-              <h4 className="text-sm font-bold text-white">No Outstanding Balance</h4>
+              <h4 className="text-sm font-bold text-white">No Outstanding Balance Recorded</h4>
               <p className="text-xs text-zinc-400 max-w-sm mx-auto">
-                This customer currently has ₹0 balance. Any future extra payments or balance adjustments
-                will automatically appear here.
+                This customer currently shows ₹0 balance on record. If you paid them cash or want to log a cash payment/adjustment, click below.
               </p>
-              <button
-                type="button"
-                onClick={onClose}
-                className="py-2.5 px-5 bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs rounded-xl"
-              >
-                Close
-              </button>
+              <div className="flex items-center justify-center gap-2 pt-1 flex-wrap">
+                {mode === 'pay' && (
+                  <button
+                    type="button"
+                    onClick={() => setAllowManualOverride(true)}
+                    className="py-2 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-emerald-600/20"
+                    id="btn-allow-manual-cash-payout"
+                  >
+                    <DollarSign className="w-3.5 h-3.5" />
+                    <span>Record Cash Payment Anyway</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="py-2 px-4 bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs rounded-xl"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
+              {/* Payment Method Selection (when in Pay mode) */}
+              {mode === 'pay' && (
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-zinc-300">
+                    Payment Method Used:
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['Cash', 'UPI', 'Bank'] as const).map((meth) => (
+                      <button
+                        key={meth}
+                        type="button"
+                        onClick={() => {
+                          setPayoutMethod(meth);
+                          if (meth === 'Cash' && (!notes || notes.includes('UPI') || notes.includes('Bank'))) {
+                            setNotes('Paid user balance in cash');
+                          }
+                        }}
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                          payoutMethod === meth
+                            ? 'bg-emerald-600 text-white shadow-md'
+                            : 'bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        {meth === 'Cash' && <DollarSign className="w-3.5 h-3.5" />}
+                        <span>{meth}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {/* If "Use Balance" mode: Option to link with a pending request */}
               {mode === 'use' && userPendingRequests.length > 0 && (
                 <div>
@@ -408,9 +458,11 @@ export const BalanceManagementModal: React.FC<BalanceManagementModalProps> = ({
                   ) : (
                     <>
                       <span>
-                        {mode === 'pay' ? 'Confirm Pay Balance' : 'Confirm Use Balance'} (
-                        {settings.currencySymbol}
-                        {numAmount.toLocaleString('en-IN')})
+                        {mode === 'pay'
+                          ? payoutMethod === 'Cash'
+                            ? `Confirm Paid Cash (${settings.currencySymbol}${numAmount.toLocaleString('en-IN')})`
+                            : `Confirm Pay Balance (${settings.currencySymbol}${numAmount.toLocaleString('en-IN')})`
+                          : `Confirm Use Balance (${settings.currencySymbol}${numAmount.toLocaleString('en-IN')})`}
                       </span>
                       <ArrowRight className="w-4 h-4" />
                     </>

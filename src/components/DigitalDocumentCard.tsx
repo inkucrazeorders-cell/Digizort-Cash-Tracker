@@ -1,9 +1,10 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { OrderRequest } from '../types';
 import { useApp } from '../context/AppContext';
 import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import confetti from 'canvas-confetti';
 import {
   Download,
   Share2,
@@ -19,6 +20,9 @@ import {
   ExternalLink,
   Loader2,
   AlertTriangle,
+  Coins,
+  X,
+  CreditCard,
 } from 'lucide-react';
 
 interface DigitalDocumentCardProps {
@@ -34,37 +38,174 @@ export const DigitalDocumentCard: React.FC<DigitalDocumentCardProps> = ({
   onOpenRecordPayment,
   showWhatsAppShare = false,
 }) => {
-  const { settings, showToast } = useApp();
+  const { settings, showToast, adminRecordPayment, adminPayBalance, getUserBalanceInfo, currentUser } = useApp();
   const cardRef = useRef<HTMLDivElement>(null);
+  const [currentTransaction, setCurrentTransaction] = useState<OrderRequest>(transaction);
+
+  useEffect(() => {
+    setCurrentTransaction(transaction);
+  }, [transaction]);
+
   const [isExporting, setIsExporting] = useState(false);
   const [isSendingWhatsApp, setIsSendingWhatsApp] = useState(false);
   const [whatsAppSendStatus, setWhatsAppSendStatus] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
   const [whatsAppErrorMessage, setWhatsAppErrorMessage] = useState<string | null>(null);
   const [sentMessageId, setSentMessageId] = useState<string | null>(null);
+  const [isUnregisteredError, setIsUnregisteredError] = useState(false);
+  const [showPinRegister, setShowPinRegister] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [isRegisteringPin, setIsRegisteringPin] = useState(false);
 
-  const formattedDate = new Date(transaction.createdAt).toLocaleDateString('en-IN', {
+  // Cash payment & balance payout state
+  const [showCashModal, setShowCashModal] = useState(false);
+  const [cashAmount, setCashAmount] = useState<string>('');
+  const [cashNote, setCashNote] = useState('Paid user balance in cash');
+  const [isRecordingCash, setIsRecordingCash] = useState(false);
+
+  // Customer balance payout state
+  const [showPayoutCreditModal, setShowPayoutCreditModal] = useState(false);
+  const [payoutAmount, setPayoutAmount] = useState<string>('');
+  const [payoutNote, setPayoutNote] = useState('Paid customer balance cash at desk');
+  const [isPayingCredit, setIsPayingCredit] = useState(false);
+
+  const formattedDate = new Date(currentTransaction.createdAt).toLocaleDateString('en-IN', {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
   });
 
-  const actualAmount = transaction.actualPrice || transaction.amount || transaction.expectedPrice || 0;
-  const paidAmount = transaction.amountPaid || (transaction.status === 'Paid' ? actualAmount : 0);
-  const remainingAmount = transaction.remainingAmount ?? (transaction.status === 'Paid' ? 0 : Math.max(0, actualAmount - paidAmount));
+  const actualAmount = currentTransaction.actualPrice || currentTransaction.amount || currentTransaction.expectedPrice || 0;
+  const paidAmount = currentTransaction.amountPaid || (currentTransaction.status === 'Paid' ? actualAmount : 0);
+  const remainingAmount = currentTransaction.remainingAmount ?? (currentTransaction.status === 'Paid' ? 0 : Math.max(0, actualAmount - paidAmount));
+
+  const userBalInfo = getUserBalanceInfo(currentTransaction.userMobile, currentTransaction.userId);
+  const customerAvailableCredit = userBalInfo.availableBalance;
+
+  // Sync cashAmount when modal opens or remainingAmount changes
+  useEffect(() => {
+    if (remainingAmount > 0) {
+      setCashAmount(String(remainingAmount));
+    }
+  }, [remainingAmount]);
+
+  useEffect(() => {
+    if (customerAvailableCredit > 0) {
+      setPayoutAmount(String(customerAvailableCredit));
+    }
+  }, [customerAvailableCredit]);
+
+  const handleMarkPaidInCash = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const num = Number(cashAmount) || remainingAmount;
+    if (num <= 0) {
+      showToast('Please enter a valid cash amount greater than 0.');
+      return;
+    }
+    try {
+      setIsRecordingCash(true);
+      await adminRecordPayment(currentTransaction.id, num, cashNote.trim() || 'Paid user balance in cash');
+      
+      const newPaid = paidAmount + num;
+      const newRem = Math.max(0, actualAmount - newPaid);
+      const newStatus = newRem === 0 ? 'Paid' : 'Partially Paid';
+      
+      setCurrentTransaction((prev) => ({
+        ...prev,
+        amountPaid: newPaid,
+        remainingAmount: newRem,
+        status: newStatus,
+        timeline: [
+          ...(prev.timeline || []),
+          {
+            id: 'EVT-' + Date.now(),
+            type: newRem === 0 ? 'TRANSACTION_COMPLETED' : 'PARTIAL_PAYMENT',
+            title: newRem === 0 ? 'Full Payment Received (Cash)' : `Partial Cash Payment (+₹${num})`,
+            timestamp: new Date().toISOString(),
+            amountPaidThisStep: num,
+            totalPaidSoFar: newPaid,
+            remainingBalance: newRem,
+            notes: cashNote.trim() || 'Paid user balance in cash',
+            actor: 'ADMIN',
+          },
+        ],
+      }));
+
+      setShowCashModal(false);
+      confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+      showToast(`Recorded cash payment of ₹${num.toLocaleString('en-IN')}. Status: ${newStatus}`);
+      if (onOpenRecordPayment) {
+        // If parent has a handler to refresh, trigger it
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Failed to record cash payment');
+    } finally {
+      setIsRecordingCash(false);
+    }
+  };
+
+  const handlePayCustomerCreditCash = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const num = Number(payoutAmount) || customerAvailableCredit;
+    if (num <= 0) {
+      showToast('Please enter a valid amount greater than 0.');
+      return;
+    }
+    try {
+      setIsPayingCredit(true);
+      await adminPayBalance({
+        userId: currentTransaction.userId,
+        userMobile: currentTransaction.userMobile,
+        userName: currentTransaction.userName,
+        amount: num,
+        notes: `Cash Payout - ${payoutNote.trim() || 'Paid customer balance cash'}`,
+        relatedRequestId: currentTransaction.id,
+      });
+
+      // Update local transaction state immediately so UI updates in real-time
+      setCurrentTransaction((prev) => {
+        const currentExtra = prev.extraCash || 0;
+        const deduct = Math.min(currentExtra, num);
+        return {
+          ...prev,
+          extraCash: Math.max(0, currentExtra - deduct),
+          extraCashPaid: (prev.extraCashPaid || 0) + deduct,
+        };
+      });
+
+      setShowPayoutCreditModal(false);
+      confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+      showToast(`Paid ₹${num.toLocaleString('en-IN')} cash balance to ${currentTransaction.userName}`);
+    } catch (err: any) {
+      showToast(err.message || 'Failed to pay customer balance cash');
+    } finally {
+      setIsPayingCredit(false);
+    }
+  };
 
   // WhatsApp Message Generator
   const generateWhatsAppMessage = () => {
+    let extraCashLine = '';
+    if (customerAvailableCredit > 0) {
+      extraCashLine = `\n🪙 *Extra Cash Pending to Pay:* ${settings.currencySymbol}${customerAvailableCredit.toLocaleString('en-IN')}`;
+    } else if (
+      currentTransaction.extraCashPaid ||
+      (currentTransaction.extraCash && currentTransaction.extraCash > 0) ||
+      userBalInfo.hasTransactions
+    ) {
+      extraCashLine = `\n🪙 *Extra Cash / Store Credit:* Cleared / Fully Paid (${settings.currencySymbol}0)`;
+    }
+
     const text = `*DIGIZORT OFFICIAL STATEMENT & CONFIRMATION*
 ━━━━━━━━━━━━━━━━━━━━━
-📄 *Document ID:* #${transaction.id}
-👤 *Customer:* ${transaction.userName} (${transaction.userMobile})
-📦 *Item/Service:* ${transaction.productName}
-🎯 *Purpose:* ${transaction.purpose}
-📊 *Status:* ${transaction.status.toUpperCase()}
+📄 *Document ID:* #${currentTransaction.id}
+👤 *Customer:* ${currentTransaction.userName} (${currentTransaction.userMobile})
+📦 *Item/Service:* ${currentTransaction.productName}
+🎯 *Purpose:* ${currentTransaction.purpose}
+📊 *Status:* ${currentTransaction.status.toUpperCase()}
 
 💰 *Total Amount:* ${settings.currencySymbol}${actualAmount.toLocaleString('en-IN')}
 ✅ *Paid So Far:* ${settings.currencySymbol}${paidAmount.toLocaleString('en-IN')}
-⏳ *Remaining Balance:* ${settings.currencySymbol}${remainingAmount.toLocaleString('en-IN')}
+⏳ *Order Balance Due:* ${settings.currencySymbol}${remainingAmount.toLocaleString('en-IN')}${extraCashLine}
 
 📅 *Date:* ${formattedDate}
 ━━━━━━━━━━━━━━━━━━━━━
@@ -214,10 +355,18 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
 
       if (response.ok && data.success) {
         setWhatsAppSendStatus('success');
+        setIsUnregisteredError(false);
         setSentMessageId(data.message_id || data.messageId || 'sent');
         showToast(data.message || `WhatsApp message sent successfully to ${transaction.userName}!`);
       } else {
         setWhatsAppSendStatus('error');
+        const isUnreg =
+          data.isUnregistered ||
+          data.code === 133010 ||
+          (data.error && data.error.includes('133010')) ||
+          (data.details && data.details.includes('133010'));
+        setIsUnregisteredError(!!isUnreg);
+
         const errTitle = data.error || 'WhatsApp API error';
         const errDetail = data.details ? `: ${data.details}` : '';
         const fullErr = `${errTitle}${errDetail}`;
@@ -232,6 +381,35 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
       showToast(errText);
     } finally {
       setIsSendingWhatsApp(false);
+    }
+  };
+
+  const handleRegisterPin = async () => {
+    if (!pinInput || pinInput.trim().length !== 6) {
+      showToast('Please enter a valid 6-digit numeric PIN');
+      return;
+    }
+    setIsRegisteringPin(true);
+    try {
+      const res = await fetch('/api/whatsapp/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: pinInput.trim() }),
+      });
+      const resData = await res.json().catch(() => ({}));
+      if (res.ok && resData.success) {
+        showToast('Phone number successfully registered with Meta Cloud API!');
+        setIsUnregisteredError(false);
+        setShowPinRegister(false);
+        // Automatically retry dispatch
+        handleShareWhatsApp();
+      } else {
+        showToast(resData.error || resData.details || 'Failed to register PIN with Meta');
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Error registering PIN');
+    } finally {
+      setIsRegisteringPin(false);
     }
   };
 
@@ -313,30 +491,30 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
   };
 
   const getStatusBadge = () => {
-    if (transaction.status === 'Paid' || transaction.status === 'Completed') {
+    if (currentTransaction.status === 'Paid' || currentTransaction.status === 'Completed') {
       return (
         <span className="px-3 py-1 rounded-full text-[11px] font-extrabold uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 tracking-wider">
           Completed & Fully Paid
         </span>
       );
     }
-    if (transaction.status === 'Partially Paid') {
+    if (currentTransaction.status === 'Partially Paid') {
       return (
         <span className="px-3 py-1 rounded-full text-[11px] font-extrabold uppercase bg-amber-500/20 text-amber-400 border border-amber-500/40 tracking-wider">
           Partially Paid
         </span>
       );
     }
-    if (transaction.status === 'Rejected' || transaction.status === 'Cancelled') {
+    if (currentTransaction.status === 'Rejected' || currentTransaction.status === 'Cancelled') {
       return (
         <span className="px-3 py-1 rounded-full text-[11px] font-extrabold uppercase bg-rose-500/20 text-rose-400 border border-rose-500/40 tracking-wider">
-          {transaction.status}
+          {currentTransaction.status}
         </span>
       );
     }
     return (
       <span className="px-3 py-1 rounded-full text-[11px] font-extrabold uppercase bg-blue-500/20 text-blue-400 border border-blue-500/40 tracking-wider">
-        {transaction.status}
+        {currentTransaction.status}
       </span>
     );
   };
@@ -374,7 +552,7 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
           <div className="text-right space-y-1">
             {getStatusBadge()}
             <p className="text-[10px] text-zinc-500 font-mono block mt-1">
-              Doc ID: #{transaction.id}
+              Doc ID: #{currentTransaction.id}
             </p>
           </div>
         </div>
@@ -385,10 +563,10 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
             <span className="text-[10px] font-bold text-zinc-500 uppercase block mb-0.5">
               Customer Identity
             </span>
-            <p className="font-extrabold text-white text-sm">{transaction.userName}</p>
-            <p className="text-zinc-400 text-[11px]">{transaction.userMobile}</p>
-            {transaction.userEmail && (
-              <p className="text-zinc-500 text-[10px]">{transaction.userEmail}</p>
+            <p className="font-extrabold text-white text-sm">{currentTransaction.userName}</p>
+            <p className="text-zinc-400 text-[11px]">{currentTransaction.userMobile}</p>
+            {currentTransaction.userEmail && (
+              <p className="text-zinc-500 text-[10px]">{currentTransaction.userEmail}</p>
             )}
           </div>
 
@@ -396,14 +574,18 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
             <span className="text-[10px] font-bold text-zinc-500 uppercase block mb-0.5">
               Order Specification
             </span>
-            <p className="font-extrabold text-rose-400 text-sm">{transaction.productName}</p>
-            <p className="text-zinc-300 text-[11px] font-medium">{transaction.purpose}</p>
+            <p className="font-extrabold text-rose-400 text-sm">{currentTransaction.productName}</p>
+            <p className="text-zinc-300 text-[11px] font-medium">{currentTransaction.purpose}</p>
             <p className="text-zinc-500 text-[10px]">{formattedDate}</p>
           </div>
         </div>
 
         {/* Pricing Summary Box */}
-        <div className="p-4 rounded-2xl bg-gradient-to-r from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 grid grid-cols-3 gap-2 text-center">
+        <div className={`p-4 rounded-2xl bg-gradient-to-r from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 grid gap-2 text-center ${
+          customerAvailableCredit > 0 || currentTransaction.extraCash || currentTransaction.extraCashPaid || userBalInfo.hasTransactions
+            ? 'grid-cols-2 sm:grid-cols-4'
+            : 'grid-cols-3'
+        }`}>
           <div>
             <span className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
               Total Price
@@ -437,7 +619,100 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
               {remainingAmount.toLocaleString('en-IN')}
             </span>
           </div>
+
+          {(customerAvailableCredit > 0 || currentTransaction.extraCash || currentTransaction.extraCashPaid || userBalInfo.hasTransactions) && (
+            <div>
+              <span className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
+                {customerAvailableCredit > 0 ? 'Extra Cash to Pay' : 'Extra Cash'}
+              </span>
+              <span
+                className={`text-base font-extrabold block ${
+                  customerAvailableCredit > 0 ? 'text-amber-400' : 'text-emerald-400'
+                }`}
+              >
+                {customerAvailableCredit > 0
+                  ? `${settings.currencySymbol}${customerAvailableCredit.toLocaleString('en-IN')}`
+                  : `Cleared (${settings.currencySymbol}0)`}
+              </span>
+            </div>
+          )}
         </div>
+
+        {/* ADMIN QUICK CASH ACTIONS (Direct inside statement) */}
+        {(remainingAmount > 0 || customerAvailableCredit > 0 || currentTransaction.extraCashPaid || userBalInfo.hasTransactions) && (
+          <div className="p-3.5 rounded-2xl bg-zinc-900/95 border border-zinc-800 space-y-2.5">
+            {remainingAmount > 0 && (
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-500/40">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                    <DollarSign className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-extrabold text-white block">
+                      Order Balance Due: {settings.currencySymbol}{remainingAmount.toLocaleString('en-IN')}
+                    </span>
+                    <span className="text-[10px] text-emerald-400 font-medium block">
+                      Did the customer pay cash? Settle now to update statement & WhatsApp receipt.
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCashAmount(String(remainingAmount));
+                    setShowCashModal(true);
+                  }}
+                  className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all shrink-0 active:scale-[0.98]"
+                  id="btn-mark-paid-cash-banner"
+                >
+                  <DollarSign className="w-3.5 h-3.5" />
+                  <span>Mark Paid Cash ({settings.currencySymbol}{remainingAmount.toLocaleString('en-IN')})</span>
+                </button>
+              </div>
+            )}
+
+            {customerAvailableCredit > 0 && (
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/40">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+                    <Coins className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-extrabold text-amber-300 block">
+                      Extra Cash Pending to Pay: {settings.currencySymbol}{customerAvailableCredit.toLocaleString('en-IN')}
+                    </span>
+                    <span className="text-[10px] text-zinc-400 font-medium block">
+                      Customer has pending cash balance to be returned. Paid customer in cash?
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPayoutAmount(String(customerAvailableCredit));
+                    setShowPayoutCreditModal(true);
+                  }}
+                  className="py-2 px-3.5 bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all shrink-0 active:scale-[0.98]"
+                  id="btn-pay-customer-balance-cash-banner"
+                >
+                  <Coins className="w-3.5 h-3.5" />
+                  <span>Pay Customer Extra Cash ({settings.currencySymbol}{customerAvailableCredit.toLocaleString('en-IN')})</span>
+                </button>
+              </div>
+            )}
+
+            {customerAvailableCredit === 0 && (currentTransaction.extraCashPaid || userBalInfo.hasTransactions) && (
+              <div className="p-2.5 rounded-xl bg-emerald-950/30 border border-emerald-500/30 flex items-center justify-between gap-2 text-xs text-emerald-400">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span className="font-bold">
+                    Extra cash / store balance is fully cleared & paid to customer ({settings.currencySymbol}0 remaining).
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Audit Timeline Logs */}
         <div className="space-y-3">
@@ -447,13 +722,13 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
               Audit & Transaction Timeline
             </h4>
             <span className="text-[10px] text-zinc-500 font-medium">
-              {transaction.timeline?.length || 1} Events Logged
+              {currentTransaction.timeline?.length || 1} Events Logged
             </span>
           </div>
 
           <div className="space-y-2 border-l-2 border-zinc-800 pl-4 py-1">
-            {transaction.timeline && transaction.timeline.length > 0 ? (
-              transaction.timeline.map((evt, idx) => (
+            {currentTransaction.timeline && currentTransaction.timeline.length > 0 ? (
+              currentTransaction.timeline.map((evt, idx) => (
                 <div key={evt.id || idx} className="relative group text-xs space-y-0.5">
                   <div className="absolute -left-[21px] top-1.5 w-2.5 h-2.5 rounded-full bg-[#E53935] ring-4 ring-zinc-950" />
                   <div className="flex items-center justify-between text-zinc-200 font-bold">
@@ -502,7 +777,7 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
       </div>
 
       {/* Control Actions Bar */}
-      <div className={`grid ${showWhatsAppShare ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2'} gap-2`}>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <button
           onClick={handleDownloadPNG}
           disabled={isExporting}
@@ -523,11 +798,27 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
           <span>Download PDF</span>
         </button>
 
+        {remainingAmount > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setCashAmount(String(remainingAmount));
+              setShowCashModal(true);
+            }}
+            className="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition-all active:scale-[0.98]"
+            id="btn-mark-paid-cash-footer"
+            title="Mark this request's balance as paid in cash"
+          >
+            <DollarSign className="w-3.5 h-3.5" />
+            <span>Mark Paid Cash</span>
+          </button>
+        )}
+
         {showWhatsAppShare && (
           <button
             onClick={handleShareWhatsApp}
             disabled={isSendingWhatsApp || whatsAppSendStatus === 'sending'}
-            className={`col-span-2 sm:col-span-1 py-2.5 px-3 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md transition-all ${
+            className={`${remainingAmount > 0 ? '' : 'col-span-2 sm:col-span-2'} py-2.5 px-3 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-md transition-all ${
               whatsAppSendStatus === 'success'
                 ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-600/40'
                 : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'
@@ -555,31 +846,318 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
         )}
       </div>
 
+      {/* QUICK CASH SETTLEMENT MODAL */}
+      {showCashModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-4 shadow-2xl relative">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+                  <DollarSign className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-white">Mark as Paid (Cash)</h3>
+                  <p className="text-[11px] text-zinc-400">Record that customer settled balance in cash</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCashModal(false)}
+                className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleMarkPaidInCash} className="space-y-4">
+              <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400">Order:</span>
+                  <span className="text-white font-bold">{currentTransaction.productName} (#{currentTransaction.id})</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400">Customer:</span>
+                  <span className="text-white font-bold">{currentTransaction.userName} ({currentTransaction.userMobile})</span>
+                </div>
+                <div className="flex items-center justify-between pt-1.5 border-t border-zinc-800/80">
+                  <span className="text-zinc-400 font-bold">Current Balance Due:</span>
+                  <span className="text-rose-400 font-extrabold text-sm">
+                    {settings.currencySymbol}{remainingAmount.toLocaleString('en-IN')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-zinc-300">
+                    Cash Amount Received ({settings.currencySymbol})
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setCashAmount(String(remainingAmount))}
+                    className="text-[11px] text-emerald-400 font-bold hover:underline"
+                  >
+                    Full Balance ({settings.currencySymbol}{remainingAmount.toLocaleString('en-IN')})
+                  </button>
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500 font-bold text-sm">
+                    {settings.currencySymbol}
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="any"
+                    required
+                    value={cashAmount}
+                    onChange={(e) => setCashAmount(e.target.value)}
+                    placeholder="Enter cash received"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-8 pr-4 py-2.5 text-base font-extrabold text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-zinc-300">
+                  Payment Method
+                </label>
+                <div className="p-2.5 rounded-xl bg-emerald-950/30 border border-emerald-500/40 flex items-center gap-2 text-xs font-bold text-emerald-300">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>Cash (In-Hand / Store Counter Settle)</span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-zinc-300">
+                  Timeline Note <span className="text-zinc-500 font-normal">(Optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={cashNote}
+                  onChange={(e) => setCashNote(e.target.value)}
+                  placeholder="e.g. Paid in cash at counter"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCashModal(false)}
+                  className="py-2.5 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-xs transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isRecordingCash || !cashAmount || Number(cashAmount) <= 0}
+                  className="py-2.5 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-extrabold text-xs shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 transition-all"
+                  id="btn-confirm-cash-settlement"
+                >
+                  {isRecordingCash ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                  <span>Confirm Cash Payment ({settings.currencySymbol}{Number(cashAmount || 0).toLocaleString('en-IN')})</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* QUICK PAY CUSTOMER CREDIT BALANCE MODAL */}
+      {showPayoutCreditModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-4 shadow-2xl relative">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold">
+                  <Coins className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-white">Pay Customer Balance (Cash)</h3>
+                  <p className="text-[11px] text-zinc-400">Record cash paid/returned to customer from their balance</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowPayoutCreditModal(false)}
+                className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handlePayCustomerCreditCash} className="space-y-4">
+              <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400">Customer:</span>
+                  <span className="text-white font-bold">{currentTransaction.userName} ({currentTransaction.userMobile})</span>
+                </div>
+                <div className="flex items-center justify-between pt-1.5 border-t border-zinc-800/80">
+                  <span className="text-zinc-400 font-bold">Current Available Balance:</span>
+                  <span className="text-emerald-400 font-extrabold text-sm">
+                    {settings.currencySymbol}{customerAvailableCredit.toLocaleString('en-IN')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-zinc-300">
+                    Cash Amount to Pay Customer ({settings.currencySymbol})
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setPayoutAmount(String(customerAvailableCredit))}
+                    className="text-[11px] text-blue-400 font-bold hover:underline"
+                  >
+                    All Balance ({settings.currencySymbol}{customerAvailableCredit.toLocaleString('en-IN')})
+                  </button>
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500 font-bold text-sm">
+                    {settings.currencySymbol}
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="any"
+                    max={customerAvailableCredit}
+                    required
+                    value={payoutAmount}
+                    onChange={(e) => setPayoutAmount(e.target.value)}
+                    placeholder="Enter cash given to customer"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-8 pr-4 py-2.5 text-base font-extrabold text-white focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-zinc-300">
+                  Payout Method
+                </label>
+                <div className="p-2.5 rounded-xl bg-blue-950/30 border border-blue-500/40 flex items-center gap-2 text-xs font-bold text-blue-300">
+                  <CheckCircle2 className="w-4 h-4 text-blue-400 shrink-0" />
+                  <span>Cash Handed to Customer (In-Person / Desk)</span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-zinc-300">
+                  Note <span className="text-zinc-500 font-normal">(Optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={payoutNote}
+                  onChange={(e) => setPayoutNote(e.target.value)}
+                  placeholder="e.g. Paid customer balance cash at desk"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPayoutCreditModal(false)}
+                  className="py-2.5 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-xs transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isPayingCredit || !payoutAmount || Number(payoutAmount) <= 0}
+                  className="py-2.5 px-5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white font-extrabold text-xs shadow-lg shadow-blue-600/20 flex items-center gap-1.5 transition-all"
+                  id="btn-confirm-pay-customer-balance-cash"
+                >
+                  {isPayingCredit ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Coins className="w-3.5 h-3.5" />}
+                  <span>Confirm Paid Cash ({settings.currencySymbol}{Number(payoutAmount || 0).toLocaleString('en-IN')})</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* WhatsApp Delivery Status Feedback */}
       {whatsAppSendStatus === 'error' && (
-        <div className="p-3.5 rounded-2xl bg-rose-950/40 border border-rose-800/60 text-xs space-y-2 text-rose-200">
+        <div className="p-3.5 rounded-2xl bg-rose-950/40 border border-rose-800/60 text-xs space-y-3 text-rose-200">
           <div className="flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
             <div className="space-y-1 flex-1">
-              <span className="font-bold block text-rose-300">WhatsApp Dispatch Error</span>
+              <span className="font-bold block text-rose-300">
+                {isUnregisteredError ? 'Sender Number Active on WhatsApp Phone App' : 'WhatsApp Dispatch Error'}
+              </span>
               <p className="text-[11px] text-rose-300/90 leading-relaxed font-sans">{whatsAppErrorMessage}</p>
             </div>
           </div>
-          <div className="flex items-center justify-between pt-1.5 border-t border-rose-900/40 text-[11px]">
-            <span className="text-zinc-400">Manual Fallback Option:</span>
-            <button
-              onClick={() => {
-                const encoded = generateWhatsAppMessage();
-                const cleanPhone = formatWhatsAppPhone(transaction.userMobile || transaction.phone || '');
-                window.open(`https://wa.me/${cleanPhone}?text=${encoded}`, '_blank');
-              }}
-              className="text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1 transition-colors"
-              id="btn-fallback-open-whatsapp"
-            >
-              <ExternalLink className="w-3 h-3" />
-              <span>Open in WhatsApp Web</span>
-            </button>
-          </div>
+
+          {isUnregisteredError ? (
+            <div className="space-y-2 pt-1 border-t border-rose-900/50">
+              <button
+                type="button"
+                onClick={() => {
+                  const encoded = generateWhatsAppMessage();
+                  const cleanPhone = formatWhatsAppPhone(transaction.userMobile || transaction.phone || '');
+                  window.open(`https://wa.me/${cleanPhone}?text=${encoded}`, '_blank');
+                }}
+                className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition-all text-xs active:scale-[0.99]"
+                id="btn-direct-send-fallback"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>Send via WhatsApp App Now (+91 8129043397)</span>
+              </button>
+
+              <div className="pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => setShowPinRegister(!showPinRegister)}
+                  className="text-[11px] text-zinc-400 hover:text-zinc-200 underline flex items-center gap-1"
+                >
+                  <span>{showPinRegister ? 'Hide Cloud API PIN registration' : 'Want automated server background sending? Register 6-digit PIN'}</span>
+                </button>
+
+                {showPinRegister && (
+                  <div className="mt-2 p-2.5 rounded-xl bg-black/40 border border-zinc-700/60 space-y-2">
+                    <p className="text-[10px] text-zinc-300">
+                      Enter the 6-digit PIN you created in Meta WhatsApp Manager (or choose a new 6-digit PIN) to register the Cloud API:
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="password"
+                        maxLength={6}
+                        placeholder="6-digit PIN"
+                        value={pinInput}
+                        onChange={(e) => setPinInput(e.target.value.replace(/\D/g, ''))}
+                        className="w-32 bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-white tracking-widest text-center focus:outline-none focus:border-emerald-500"
+                      />
+                      <button
+                        type="button"
+                        disabled={isRegisteringPin || pinInput.length !== 6}
+                        onClick={handleRegisterPin}
+                        className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold rounded-lg text-xs flex items-center gap-1 transition-all"
+                      >
+                        {isRegisteringPin ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                        <span>Register PIN</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between pt-1.5 border-t border-rose-900/40 text-[11px]">
+              <span className="text-zinc-400">Manual Fallback Option:</span>
+              <button
+                onClick={() => {
+                  const encoded = generateWhatsAppMessage();
+                  const cleanPhone = formatWhatsAppPhone(transaction.userMobile || transaction.phone || '');
+                  window.open(`https://wa.me/${cleanPhone}?text=${encoded}`, '_blank');
+                }}
+                className="text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1 transition-colors"
+                id="btn-fallback-open-whatsapp"
+              >
+                <ExternalLink className="w-3 h-3" />
+                <span>Open in WhatsApp Web</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
 

@@ -294,12 +294,35 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
             {/* ACTION 4: RECORD PAYMENT */}
             {actionType === 'payment' && (
               <>
-                <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800/80 text-xs flex items-center justify-between">
-                  <span className="text-zinc-400">Current Balance Due:</span>
-                  <span className="font-extrabold text-rose-400 text-sm">
-                    {settings.currencySymbol}
-                    {remaining.toLocaleString('en-IN')}
-                  </span>
+                <div className="p-3.5 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+                        <DollarSign className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <span className="text-xs font-extrabold text-white block">Customer Balance Due</span>
+                        <span className="text-[10px] text-emerald-400 block">Paid user balance in cash? 1-click settle</span>
+                      </div>
+                    </div>
+                    <span className="font-extrabold text-emerald-400 text-base">
+                      {settings.currencySymbol}{remaining.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaymentSource('cash');
+                      setPaymentAmount(String(remaining));
+                      setAdminNote('Paid user balance in cash');
+                    }}
+                    className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all active:scale-[0.98]"
+                    id="btn-quick-mark-paid-cash-modal"
+                  >
+                    <DollarSign className="w-3.5 h-3.5" />
+                    <span>Mark Full Balance as Paid Cash ({settings.currencySymbol}{remaining.toLocaleString('en-IN')})</span>
+                  </button>
                 </div>
 
                 {userAvailableCredit > 0 && (
@@ -522,7 +545,13 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
                       {actionType === 'reject' && 'Confirm Rejection'}
                       {actionType === 'accept' && 'Accept & Confirm'}
                       {actionType === 'status' && 'Update Status'}
-                      {actionType === 'payment' && (isOverpayment ? 'Confirm Payment & Extra Cash' : 'Record Payment')}
+                      {actionType === 'payment' && (
+                        paymentSource === 'cash'
+                          ? `Confirm Paid Cash (${settings.currencySymbol}${Number(paymentAmount || remaining).toLocaleString('en-IN')})`
+                          : isOverpayment
+                          ? 'Confirm Payment & Extra Cash'
+                          : 'Record Payment'
+                      )}
                     </span>
                   </>
                 )}

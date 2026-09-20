@@ -75,6 +75,14 @@ export function isRequestEligibleForPayment(request: OrderRequest): boolean {
 }
 
 /**
+ * Gets remaining extra cash pending to pay back to customer on a request.
+ */
+export function getRequestPendingExtraCash(request: OrderRequest): number {
+  if (isRequestRejected(request) || isRequestCancelled(request)) return 0;
+  return Math.max(0, (request.extraCash || 0) - (request.extraCashPaid || 0));
+}
+
+/**
  * Summary calculations for a user or system-wide collection of requests.
  */
 export interface AccountFinancialSummary {
@@ -85,13 +93,16 @@ export interface AccountFinancialSummary {
   totalRequestAmount: number;
   totalPaid: number;
   totalPending: number;
-  totalExtraCash: number;
+  totalExtraCash: number; // Active extra cash pending to pay back to customers
+  totalExtraCashCollected?: number; // Total extra cash ever received
+  totalExtraCashReturned?: number; // Total extra cash paid/returned back to customers
   outstandingBalance: number;
 }
 
 export function calculateAccountSummary(
   requests: OrderRequest[],
-  groupPayments: GroupPayment[] = []
+  groupPayments: GroupPayment[] = [],
+  balanceTransactions: BalanceTransaction[] = []
 ): AccountFinancialSummary {
   let activeRequests = 0;
   let rejectedRequests = 0;
@@ -100,6 +111,8 @@ export function calculateAccountSummary(
   let totalPaid = 0;
   let totalPending = 0;
   let totalExtraCash = 0;
+  let totalExtraCashCollected = 0;
+  let totalExtraCashReturned = 0;
 
   for (const req of requests) {
     if (isRequestRejected(req)) {
@@ -119,10 +132,6 @@ export function calculateAccountSummary(
     totalPaid += paid;
     totalPending += remaining;
 
-    if (req.extraCash && req.extraCash > 0) {
-      totalExtraCash += req.extraCash;
-    }
-
     if (req.status === 'Paid' || req.status === 'Completed' || remaining === 0) {
       completedRequests++;
     } else {
@@ -130,10 +139,75 @@ export function calculateAccountSummary(
     }
   }
 
-  // Also accumulate extra cash from group payments (if not already counted)
-  for (const gp of groupPayments) {
-    if (gp.extraCash && gp.extraCash > 0) {
-      totalExtraCash += gp.extraCash;
+  // Authoritative extra cash calculation:
+  // If balanceTransactions are provided, compute active available balance across all customers
+  if (balanceTransactions && balanceTransactions.length > 0) {
+    const userTxMap = new Map<string, BalanceTransaction[]>();
+    for (const tx of balanceTransactions) {
+      const key = tx.userMobile || tx.userId;
+      if (!key) continue;
+      const list = userTxMap.get(key) || [];
+      list.push(tx);
+      userTxMap.set(key, list);
+
+      if (tx.type === 'Balance Added') {
+        totalExtraCashCollected += tx.amount || 0;
+      } else if (tx.type === 'Balance Returned' || tx.type === 'Balance Paid' || tx.type === 'Balance Used') {
+        totalExtraCashReturned += tx.amount || 0;
+      }
+    }
+
+    // Sum active pending extra cash / available balance for each customer
+    for (const [, txs] of userTxMap) {
+      txs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      const altering = txs.filter((t) => t.type !== 'Money Requested');
+      if (altering.length > 0) {
+        const latest = altering[altering.length - 1];
+        totalExtraCash += Math.max(0, latest.remainingBalance);
+      }
+    }
+
+    // Include requests of users who have extra cash but no balance transactions logged yet
+    const knownKeys = new Set(userTxMap.keys());
+    for (const req of requests) {
+      if (isRequestRejected(req) || isRequestCancelled(req)) continue;
+      const key = req.userMobile || req.userId;
+      if (key && !knownKeys.has(key)) {
+        const reqPendingExtra = Math.max(0, (req.extraCash || 0) - (req.extraCashPaid || 0));
+        if (reqPendingExtra > 0) {
+          totalExtraCash += reqPendingExtra;
+          totalExtraCashCollected += req.extraCash || 0;
+          totalExtraCashReturned += req.extraCashPaid || 0;
+        }
+      }
+    }
+
+    // Include group payments for users without balance transactions
+    for (const gp of groupPayments) {
+      const key = gp.userMobile || gp.userId;
+      if (key && !knownKeys.has(key) && gp.extraCash && gp.extraCash > 0) {
+        totalExtraCash += gp.extraCash;
+        totalExtraCashCollected += gp.extraCash;
+      }
+    }
+  } else {
+    // Fallback if balanceTransactions are not passed: deduct any extraCashPaid from extraCash
+    for (const req of requests) {
+      if (isRequestRejected(req) || isRequestCancelled(req)) continue;
+      const reqPendingExtra = Math.max(0, (req.extraCash || 0) - (req.extraCashPaid || 0));
+      totalExtraCash += reqPendingExtra;
+      if (req.extraCash && req.extraCash > 0) {
+        totalExtraCashCollected += req.extraCash;
+      }
+      if (req.extraCashPaid && req.extraCashPaid > 0) {
+        totalExtraCashReturned += req.extraCashPaid;
+      }
+    }
+    for (const gp of groupPayments) {
+      if (gp.extraCash && gp.extraCash > 0) {
+        totalExtraCash += gp.extraCash;
+        totalExtraCashCollected += gp.extraCash;
+      }
     }
   }
 
@@ -146,6 +220,8 @@ export function calculateAccountSummary(
     totalPaid,
     totalPending,
     totalExtraCash,
+    totalExtraCashCollected,
+    totalExtraCashReturned,
     outstandingBalance: Math.max(0, totalPending),
   };
 }
