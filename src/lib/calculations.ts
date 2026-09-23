@@ -28,9 +28,45 @@ export function isRequestFullyPaid(request: OrderRequest): boolean {
 
 /**
  * Gets effective price of a request.
+ * If a supplier offer / special price adjustment has been applied, currentOrderAmount is authoritative.
  */
 export function getRequestPrice(request: OrderRequest): number {
+  if (
+    request.currentOrderAmount !== undefined &&
+    request.currentOrderAmount !== null &&
+    !isNaN(Number(request.currentOrderAmount)) &&
+    Number(request.currentOrderAmount) >= 0
+  ) {
+    return Number(request.currentOrderAmount);
+  }
   return Number(request.actualPrice) || Number(request.expectedPrice) || Number(request.amount) || 0;
+}
+
+/**
+ * Gets original requested price of a request before any offer or price adjustments.
+ */
+export function getOriginalPrice(request: OrderRequest): number {
+  if (
+    request.originalRequestedAmount !== undefined &&
+    request.originalRequestedAmount !== null &&
+    !isNaN(Number(request.originalRequestedAmount)) &&
+    Number(request.originalRequestedAmount) >= 0
+  ) {
+    return Number(request.originalRequestedAmount);
+  }
+  return Number(request.expectedPrice) || Number(request.actualPrice) || Number(request.amount) || 0;
+}
+
+/**
+ * Gets customer savings amount if a special offer / price adjustment has been applied.
+ */
+export function getOfferSavings(request: OrderRequest): number {
+  const orig = getOriginalPrice(request);
+  const cur = getRequestPrice(request);
+  if (request.offerApplied || (orig > 0 && cur < orig)) {
+    return Math.max(0, orig - cur);
+  }
+  return 0;
 }
 
 /**
@@ -58,7 +94,7 @@ export function getRequestRemaining(request: OrderRequest): number {
   const total = getRequestPrice(request);
   const paid = Number(request.amountPaid) || 0;
   if (request.remainingAmount !== undefined && request.remainingAmount !== null) {
-    return Math.max(0, Number(request.remainingAmount));
+    return Math.min(Math.max(0, Number(request.remainingAmount)), Math.max(0, total - paid));
   }
   return Math.max(0, total - paid);
 }
@@ -88,7 +124,11 @@ export function getRequestPendingExtraCash(request: OrderRequest): number {
 export interface AccountFinancialSummary {
   totalRequests: number;
   activeRequests: number;
+  pendingReviewRequests: number;
+  acceptedRequests: number;
+  processingRequests: number;
   rejectedRequests: number;
+  cancelledRequests: number;
   completedRequests: number;
   totalRequestAmount: number;
   totalPaid: number;
@@ -97,6 +137,7 @@ export interface AccountFinancialSummary {
   totalExtraCashCollected?: number; // Total extra cash ever received
   totalExtraCashReturned?: number; // Total extra cash paid/returned back to customers
   outstandingBalance: number;
+  totalPaymentsCount: number;
 }
 
 export function calculateAccountSummary(
@@ -106,6 +147,10 @@ export function calculateAccountSummary(
 ): AccountFinancialSummary {
   let activeRequests = 0;
   let rejectedRequests = 0;
+  let cancelledRequests = 0;
+  let pendingReviewRequests = 0;
+  let acceptedRequests = 0;
+  let processingRequests = 0;
   let completedRequests = 0;
   let totalRequestAmount = 0;
   let totalPaid = 0;
@@ -113,6 +158,7 @@ export function calculateAccountSummary(
   let totalExtraCash = 0;
   let totalExtraCashCollected = 0;
   let totalExtraCashReturned = 0;
+  let totalPaymentsCount = 0;
 
   for (const req of requests) {
     if (isRequestRejected(req)) {
@@ -121,6 +167,7 @@ export function calculateAccountSummary(
     }
 
     if (isRequestCancelled(req)) {
+      cancelledRequests++;
       continue; // Excluded from balances
     }
 
@@ -132,10 +179,21 @@ export function calculateAccountSummary(
     totalPaid += paid;
     totalPending += remaining;
 
+    if (paid > 0) {
+      totalPaymentsCount++;
+    }
+
     if (req.status === 'Paid' || req.status === 'Completed' || remaining === 0) {
       completedRequests++;
     } else {
       activeRequests++;
+      if (req.status === 'Pending Review') {
+        pendingReviewRequests++;
+      } else if (req.status === 'Accepted') {
+        acceptedRequests++;
+      } else {
+        processingRequests++;
+      }
     }
   }
 
@@ -214,7 +272,11 @@ export function calculateAccountSummary(
   return {
     totalRequests: requests.length,
     activeRequests,
+    pendingReviewRequests,
+    acceptedRequests,
+    processingRequests,
     rejectedRequests,
+    cancelledRequests,
     completedRequests,
     totalRequestAmount,
     totalPaid,
@@ -223,6 +285,7 @@ export function calculateAccountSummary(
     totalExtraCashCollected,
     totalExtraCashReturned,
     outstandingBalance: Math.max(0, totalPending),
+    totalPaymentsCount,
   };
 }
 

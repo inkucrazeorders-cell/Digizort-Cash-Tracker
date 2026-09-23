@@ -12,6 +12,7 @@ import {
   BalanceTransactionType,
   BalanceRequest,
   BalanceRequestStatus,
+  PriceAdjustment,
 } from '../types';
 import {
   db,
@@ -26,6 +27,8 @@ import {
 } from '../lib/firebase';
 import {
   getRequestPrice,
+  getOriginalPrice,
+  getOfferSavings,
   getRequestRemaining,
   isRequestRejected,
   getUserAvailableBalance,
@@ -109,9 +112,17 @@ interface AppContextType {
     userMobile: string;
     userName: string;
     amount: number;
-    type: 'Balance Added' | 'Balance Adjustment';
+    type?: 'Balance Added' | 'Balance Adjustment';
+    reason?: string;
     notes?: string;
   }) => Promise<void>;
+
+  // Notifications
+  adminNotifications: AppNotification[];
+  unreadAdminNotificationsCount: number;
+  unreadUserNotificationsCount: number;
+  markNotificationAsRead: (notificationId: string) => Promise<void>;
+  markAllNotificationsAsRead: (target: 'ADMIN' | string) => Promise<void>;
 
   // Admin Actions
   adminAcceptRequest: (requestId: string, actualPrice: number, adminNotes?: string) => Promise<void>;
@@ -119,6 +130,12 @@ interface AppContextType {
   adminDeleteRequest: (requestId: string) => Promise<void>;
   adminUpdateStatus: (requestId: string, newStatus: RequestStatus, notes?: string) => Promise<void>;
   adminRecordPayment: (requestId: string, paymentAmount: number, note?: string) => Promise<void>;
+  recordPayment?: (requestId: string, paymentAmount: number, note?: string) => Promise<void>;
+  adminApplyOffer: (params: {
+    requestId: string;
+    newPrice: number;
+    message?: string;
+  }) => Promise<void>;
   adminProcessGroupPayment: (params: {
     userId: string;
     userName: string;
@@ -128,6 +145,11 @@ interface AppContextType {
     paymentDate?: string;
     notes?: string;
   }) => Promise<string>;
+  adminRecordGroupPaymentReceived: (params: {
+    groupPaymentId: string;
+    amountReceived: number;
+    notes?: string;
+  }) => Promise<void>;
   adminSuspendUser: (userId: string) => Promise<void>;
   adminUnsuspendUser: (userId: string) => Promise<void>;
   adminDeleteUser: (userId: string) => Promise<void>;
@@ -344,10 +366,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ? allRequests.filter((r) => r.userMobile === currentUser.mobileNumber)
     : [];
 
-  // Filter notifications for current user
+  // Filter notifications for current user - strict privacy, never leak between users
   const userNotifications = currentUser
-    ? notifications.filter((n) => n.targetUserMobile === 'ALL' || n.targetUserMobile === currentUser.mobileNumber)
-    : notifications;
+    ? notifications.filter((n) => n.targetUserMobile === currentUser.mobileNumber)
+    : [];
+
+  // Filter notifications for Admin
+  const adminNotifications = notifications.filter((n) => n.targetUserMobile === 'ADMIN');
+
+  const unreadAdminNotificationsCount = adminNotifications.filter((n) => !n.read).length;
+  const unreadUserNotificationsCount = userNotifications.filter((n) => !n.read).length;
+
+  const markNotificationAsRead = async (notificationId: string) => {
+    try {
+      await updateDoc(doc(db, 'notifications', notificationId), {
+        read: true,
+        readAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.error('Failed to mark notification as read:', e);
+    }
+  };
+
+  const markAllNotificationsAsRead = async (target: 'ADMIN' | string) => {
+    try {
+      const targets = notifications.filter(
+        (n) => !n.read && (target === 'ADMIN' ? n.targetUserMobile === 'ADMIN' : n.targetUserMobile === target)
+      );
+      if (targets.length === 0) return;
+      const batch = writeBatch(db);
+      const nowIso = new Date().toISOString();
+      for (const t of targets) {
+        batch.update(doc(db, 'notifications', t.id), {
+          read: true,
+          readAt: nowIso,
+        });
+      }
+      await batch.commit();
+      showToast('All notifications marked as read.');
+    } catch (e) {
+      console.error('Failed to mark all notifications as read:', e);
+    }
+  };
 
   // Real-time Balance Calculation Helper
   const getUserBalanceInfo = (userMobile: string, userId?: string) => {
@@ -375,6 +435,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     userData: Omit<AppUser, 'id' | 'createdAt' | 'status' | 'role'>
   ): Promise<AppUser> => {
     const cleanNum = userData.mobileNumber.trim();
+    const nowIso = new Date().toISOString();
     const rawUser: AppUser = {
       id: cleanNum,
       fullName: userData.fullName.trim(),
@@ -384,11 +445,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       profilePhoto: userData.profilePhoto ? userData.profilePhoto.trim() : '',
       status: 'active',
       role: 'user',
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
+      creditBalance: 0,
     };
 
     const newUser = sanitizeForFirestore(rawUser);
-    await setDoc(doc(db, 'app_users', cleanNum), newUser);
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'app_users', cleanNum), newUser);
+
+    // Notify Admin of new registration
+    const adminNotifId = 'NOTIF-ADM-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', adminNotifId),
+      sanitizeForFirestore({
+        id: adminNotifId,
+        targetUserMobile: 'ADMIN',
+        title: 'New User Registered',
+        message: `${newUser.fullName} (${cleanNum}) registered a new account.`,
+        type: 'new_user',
+        timestamp: nowIso,
+        read: false,
+        userId: cleanNum,
+        userMobile: cleanNum,
+        userName: newUser.fullName,
+      })
+    );
+
+    await batch.commit();
+
     setCurrentUser(newUser);
     setIsAdmin(false);
     setAppMode('user_portal');
@@ -497,23 +581,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const newRequest = sanitizeForFirestore(rawRequest);
-    await setDoc(doc(db, 'requests', reqId), newRequest);
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'requests', reqId), newRequest);
 
-    // Create Notification for Admin & User
-    const notifId = 'NOTIF-' + Date.now();
-    await setDoc(
-      doc(db, 'notifications', notifId),
+    // 1. Notification for Admin Bell
+    const adminNotifId = 'NOTIF-REQ-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', adminNotifId),
       sanitizeForFirestore({
-        id: notifId,
-        targetUserMobile: 'ALL',
-        title: 'New Order Request Submitted',
-        message: `${currentUser.fullName} (${currentUser.mobileNumber}) submitted a request for "${data.productName}".`,
+        id: adminNotifId,
+        targetUserMobile: 'ADMIN',
+        title: 'New Request',
+        message: `${currentUser.fullName} submitted request #${reqId} for "${data.productName}".`,
+        type: 'new_request',
+        timestamp: nowIso,
+        read: false,
+        requestId: reqId,
+        relatedRequestId: reqId,
+        userId: currentUser.id,
+        userMobile: currentUser.mobileNumber,
+        userName: currentUser.fullName,
+      })
+    );
+
+    // 2. Notification for User History
+    const userNotifId = 'NOTIF-USR-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', userNotifId),
+      sanitizeForFirestore({
+        id: userNotifId,
+        targetUserMobile: currentUser.mobileNumber,
+        title: 'Request Submitted',
+        message: `Your request for "${data.productName}" (#${reqId}) was successfully submitted and is under review.`,
         type: 'request_submitted',
         timestamp: nowIso,
         read: false,
         requestId: reqId,
+        relatedRequestId: reqId,
       })
     );
+
+    await batch.commit();
 
     showToast('New Request Submitted Successfully!');
   };
@@ -541,11 +649,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       actor: 'USER',
     };
 
-    await updateDoc(docRef, {
+    const batch = writeBatch(db);
+    batch.update(docRef, {
       status: 'Cancelled',
       timeline: [...(req.timeline || []), cancelEvt],
       updatedAt: nowIso,
     });
+
+    const adminNotifId = 'NOTIF-CAN-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', adminNotifId),
+      sanitizeForFirestore({
+        id: adminNotifId,
+        targetUserMobile: 'ADMIN',
+        title: 'Request Cancelled',
+        message: `${req.userName || 'Customer'} cancelled request #${req.id} for "${req.productName}".`,
+        type: 'request_cancelled',
+        timestamp: nowIso,
+        read: false,
+        requestId: req.id,
+        relatedRequestId: req.id,
+        userMobile: req.userMobile,
+        userName: req.userName,
+      })
+    );
+
+    await batch.commit();
 
     showToast('Request cancelled.');
   };
@@ -734,7 +863,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const req = snap.data() as OrderRequest;
     const nowIso = new Date().toISOString();
 
-    const actual = req.actualPrice || req.expectedPrice || req.amount || 0;
+    const actual = getRequestPrice(req);
     const prevPaid = req.amountPaid || 0;
     const due = Math.max(0, actual - prevPaid);
 
@@ -836,6 +965,173 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? `Payment recorded! Settled: ₹${due.toLocaleString('en-IN')} | Extra Cash: ₹${extraCash.toLocaleString('en-IN')}`
       : `Recorded payment of ₹${paymentAmount.toLocaleString('en-IN')}`
     );
+  };
+
+  const adminApplyOffer = async (params: {
+    requestId: string;
+    newPrice: number;
+    message?: string;
+  }) => {
+    const { requestId, newPrice, message } = params;
+    const docRef = doc(db, 'requests', requestId);
+    const snap = await getDoc(docRef);
+    if (!snap.exists()) throw new Error('Order request not found.');
+
+    const req = snap.data() as OrderRequest;
+    const currentPrice = getRequestPrice(req);
+    const originalPrice = getOriginalPrice(req);
+
+    if (isNaN(newPrice) || newPrice <= 0) {
+      throw new Error('Please enter a valid offer price greater than ₹0.');
+    }
+
+    if (newPrice >= currentPrice) {
+      throw new Error('Offer price must be lower than the current order amount.');
+    }
+
+    const savings = currentPrice - newPrice;
+    const totalSavings = originalPrice - newPrice;
+    const nowIso = new Date().toISOString();
+    const paid = Number(req.amountPaid) || 0;
+
+    let newRemaining: number;
+    let newStatus: RequestStatus;
+    let excessPaid = 0;
+
+    if (paid >= newPrice) {
+      newRemaining = 0;
+      newStatus = 'Paid';
+      excessPaid = paid - newPrice;
+    } else {
+      newRemaining = newPrice - paid;
+      newStatus = paid > 0 ? 'Partially Paid' : (req.status === 'Pending Review' ? 'Accepted' : req.status);
+    }
+
+    const newAdjustment: PriceAdjustment = {
+      id: 'PADJ-' + Date.now(),
+      previousAmount: currentPrice,
+      newAmount: newPrice,
+      savings,
+      reason: message?.trim() || 'Supplier Special Offer',
+      message: message?.trim() || '',
+      appliedAt: nowIso,
+      appliedBy: 'ADMIN',
+    };
+
+    const offerTimelineEvt: TimelineEvent = {
+      id: 'EVT-' + Date.now(),
+      type: 'OFFER_APPLIED',
+      title: `Special Offer Applied (Price: ₹${newPrice.toLocaleString('en-IN')}, Saved ₹${savings.toLocaleString('en-IN')})`,
+      timestamp: nowIso,
+      totalPaidSoFar: Math.min(paid, newPrice),
+      remainingBalance: newRemaining,
+      notes: message?.trim() || `Special supplier offer applied: Reduced from ₹${currentPrice.toLocaleString('en-IN')} to ₹${newPrice.toLocaleString('en-IN')} (Saved ₹${savings.toLocaleString('en-IN')}).`,
+      actor: 'ADMIN',
+    };
+
+    const updatedRequestData: Partial<OrderRequest> = {
+      originalRequestedAmount: originalPrice,
+      currentOrderAmount: newPrice,
+      actualPrice: newPrice,
+      remainingAmount: newRemaining,
+      offerApplied: true,
+      offerAmount: totalSavings,
+      discountAmount: totalSavings,
+      offerMessage: message?.trim() || undefined,
+      offerUpdatedAt: nowIso,
+      offerUpdatedBy: 'ADMIN',
+      priceAdjustments: [...(req.priceAdjustments || []), newAdjustment],
+      timeline: [...(req.timeline || []), offerTimelineEvt],
+      status: newStatus,
+      updatedAt: nowIso,
+    };
+
+    if (excessPaid > 0) {
+      updatedRequestData.extraCash = (req.extraCash || 0) + excessPaid;
+    }
+
+    const batch = writeBatch(db);
+    batch.update(docRef, sanitizeForFirestore(updatedRequestData));
+
+    // Handle excess payment if customer already paid more than new offer price
+    if (excessPaid > 0) {
+      const balInfo = getUserBalanceInfo(req.userMobile, req.userId);
+      const prevBal = balInfo.availableBalance;
+      const newBal = prevBal + excessPaid;
+      const bTxId = 'BTX-' + Date.now();
+      const now = new Date();
+      const bTx: BalanceTransaction = {
+        id: bTxId,
+        userId: req.userId || '',
+        userName: req.userName,
+        userMobile: req.userMobile,
+        type: 'Balance Added',
+        amount: excessPaid,
+        previousBalance: prevBal,
+        remainingBalance: newBal,
+        date: now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+        time: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
+        timestamp: nowIso,
+        reason: 'Refund / Credit from Offer Price Reduction',
+        relatedRequestId: req.id,
+        relatedRequestTitle: req.productName,
+        actor: 'ADMIN',
+        notes: `Price reduction credit: Order price reduced to ₹${newPrice.toLocaleString('en-IN')}. Excess paid of ₹${excessPaid.toLocaleString('en-IN')} credited to customer balance.`,
+      };
+      batch.set(doc(db, 'balance_transactions', bTxId), sanitizeForFirestore(bTx));
+
+      if (req.userMobile) {
+        batch.set(
+          doc(db, 'app_users', req.userMobile),
+          { creditBalance: newBal, updatedAt: nowIso },
+          { merge: true }
+        );
+      }
+    }
+
+    // 1. Notification for Customer (Real-Time Pop-in Popup and Notification Center)
+    const custNotifId = 'NOTIF-OFFER-' + Date.now();
+    const custNotif: AppNotification = {
+      id: custNotifId,
+      targetUserMobile: req.userMobile,
+      title: '🎉 Special Offer from DIGIZORT',
+      message: message?.trim()
+        ? `${message.trim()} (Price reduced from ₹${currentPrice.toLocaleString('en-IN')} to ₹${newPrice.toLocaleString('en-IN')}. You save ₹${savings.toLocaleString('en-IN')}!)`
+        : `Good news! Your order price has been reduced from ₹${currentPrice.toLocaleString('en-IN')} to ₹${newPrice.toLocaleString('en-IN')}. You save ₹${savings.toLocaleString('en-IN')}.`,
+      type: 'special_offer',
+      timestamp: nowIso,
+      read: false,
+      requestId: req.id,
+      relatedRequestId: req.id,
+      userId: req.userId,
+      userMobile: req.userMobile,
+      userName: req.userName,
+      amount: newPrice,
+      originalPrice: currentPrice,
+      offerPrice: newPrice,
+      savings,
+    };
+    batch.set(doc(db, 'notifications', custNotifId), sanitizeForFirestore(custNotif));
+
+    // 2. Notification for Admin Bell
+    const adminNotifId = 'NOTIF-ADM-OFFER-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', adminNotifId),
+      sanitizeForFirestore({
+        id: adminNotifId,
+        targetUserMobile: 'ADMIN',
+        title: 'Special Offer Applied',
+        message: `Applied offer on #${req.id} (${req.productName}): ₹${currentPrice.toLocaleString('en-IN')} ➔ ₹${newPrice.toLocaleString('en-IN')} (Saved ₹${savings.toLocaleString('en-IN')}).`,
+        type: 'info',
+        timestamp: nowIso,
+        read: false,
+        requestId: req.id,
+        relatedRequestId: req.id,
+      })
+    );
+
+    await batch.commit();
+    showToast(`Special offer of ₹${newPrice.toLocaleString('en-IN')} applied successfully!`);
   };
 
   const adminProcessGroupPayment = async (params: {
@@ -972,6 +1268,130 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return groupPaymentId;
   };
 
+  const adminRecordGroupPaymentReceived = async (params: {
+    groupPaymentId: string;
+    amountReceived: number;
+    notes?: string;
+  }): Promise<void> => {
+    const { groupPaymentId, amountReceived, notes } = params;
+    const numReceived = Number(amountReceived);
+    if (isNaN(numReceived) || numReceived <= 0) {
+      throw new Error('Please enter a valid amount received greater than ₹0.');
+    }
+
+    const gpDocRef = doc(db, 'groupPayments', groupPaymentId);
+    const gpSnap = await getDoc(gpDocRef);
+    if (!gpSnap.exists()) {
+      throw new Error('Group payment record not found.');
+    }
+    const gp = gpSnap.data() as GroupPayment;
+    const totalDue = gp.totalDue;
+    const prevSettled = gp.amountSettled || 0;
+    const remainingGroupDue = Math.max(0, totalDue - prevSettled);
+
+    // Find child requests
+    const childRequests = allRequests.filter((r) => gp.requestIds?.includes(r.id));
+    const unpaidRequests = childRequests.filter((r) => getRequestRemaining(r) > 0);
+
+    const newlySettled = Math.min(numReceived, remainingGroupDue);
+    const newlyExtra = Math.max(0, numReceived - remainingGroupDue);
+    const updatedSettled = prevSettled + newlySettled;
+    const updatedStatus: 'PAID' | 'PARTIALLY_PAID' = updatedSettled >= totalDue ? 'PAID' : 'PARTIALLY_PAID';
+    const now = new Date();
+    const nowIso = now.toISOString();
+
+    const batch = writeBatch(db);
+
+    // Update group payment doc
+    batch.update(gpDocRef, sanitizeForFirestore({
+      amountReceived: (gp.amountReceived || 0) + numReceived,
+      amountSettled: updatedSettled,
+      extraCash: (gp.extraCash || 0) + newlyExtra,
+      status: updatedStatus,
+      notes: notes ? (gp.notes ? `${gp.notes} | ${notes}` : notes) : gp.notes || '',
+    }));
+
+    // Sequentially allocate across unpaid child requests
+    let unallocated = numReceived;
+    for (const req of unpaidRequests) {
+      if (unallocated <= 0) break;
+      const reqDue = getRequestRemaining(req);
+      const prevPaid = Number(req.amountPaid) || 0;
+      const price = getRequestPrice(req);
+
+      const allocation = Math.min(unallocated, reqDue);
+      unallocated -= allocation;
+
+      const newTotalPaid = prevPaid + allocation;
+      const newRemaining = Math.max(0, price - newTotalPaid);
+      const newReqStatus: RequestStatus = newRemaining === 0 ? 'Paid' : 'Partially Paid';
+
+      const timelineEvt: TimelineEvent = {
+        id: 'EVT-' + Date.now() + '-' + req.id.slice(-4),
+        type: newRemaining === 0 ? 'TRANSACTION_COMPLETED' : 'PARTIAL_PAYMENT',
+        title: `Follow-up Payment for Group #${groupPaymentId}`,
+        timestamp: nowIso,
+        amountPaidThisStep: allocation,
+        totalPaidSoFar: newTotalPaid,
+        remainingBalance: newRemaining,
+        notes: `Received ₹${numReceived.toLocaleString('en-IN')}, allocated: ₹${allocation.toLocaleString('en-IN')}${notes ? ` (${notes})` : ''}`,
+        actor: 'ADMIN',
+      };
+
+      const reqRef = doc(db, 'requests', req.id);
+      batch.update(reqRef, sanitizeForFirestore({
+        amountPaid: newTotalPaid,
+        remainingAmount: newRemaining,
+        status: newReqStatus,
+        timeline: [...(req.timeline || []), timelineEvt],
+        updatedAt: nowIso,
+      }));
+    }
+
+    // Record Balance Added if extra cash exists
+    if (newlyExtra > 0) {
+      const balInfo = getUserBalanceInfo(gp.userMobile, gp.userId);
+      const prevBal = balInfo.availableBalance;
+      const newBal = prevBal + newlyExtra;
+      const bTxId = 'BTX-' + Date.now();
+      const bTx: BalanceTransaction = {
+        id: bTxId,
+        userId: gp.userId || '',
+        userName: gp.userName,
+        userMobile: gp.userMobile,
+        type: 'Balance Added',
+        amount: newlyExtra,
+        previousBalance: prevBal,
+        remainingBalance: newBal,
+        date: now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+        time: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
+        timestamp: nowIso,
+        relatedGroupPaymentId: groupPaymentId,
+        actor: 'ADMIN',
+        notes: `Extra payment: +₹${newlyExtra.toLocaleString('en-IN')} from follow-up payment on Group #${groupPaymentId}`,
+      };
+      batch.set(doc(db, 'balance_transactions', bTxId), sanitizeForFirestore(bTx));
+      if (gp.userId) {
+        batch.update(doc(db, 'app_users', gp.userId), { creditBalance: newBal, updatedAt: nowIso });
+      }
+    }
+
+    // User notification
+    const notifId = 'NOTIF-' + Date.now();
+    batch.set(doc(db, 'notifications', notifId), sanitizeForFirestore({
+      id: notifId,
+      targetUserMobile: gp.userMobile,
+      title: updatedStatus === 'PAID' ? 'Group Payment Fully Settled!' : 'Partial Group Payment Received',
+      message: `Payment of ₹${numReceived.toLocaleString('en-IN')} received for Group Settlement #${groupPaymentId}.${newlyExtra > 0 ? ` Extra cash: ₹${newlyExtra.toLocaleString('en-IN')} credited to your balance.` : ''}`,
+      type: 'payment_recorded',
+      timestamp: nowIso,
+      read: false,
+    }));
+
+    await batch.commit();
+    showToast(`Payment of ₹${numReceived.toLocaleString('en-IN')} recorded for Group #${groupPaymentId}`);
+  };
+
   // USER BALANCE PAYOUT REQUESTS
   const userSubmitBalanceRequest = async (params: {
     amount: number;
@@ -1035,7 +1455,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     batch.set(doc(db, 'balance_transactions', txId), sanitizeForFirestore(txDoc));
 
-    // Notification for user
+    // 1. Notification for Admin Bell
+    const adminNotifId = 'NOTIF-BREQ-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', adminNotifId),
+      sanitizeForFirestore({
+        id: adminNotifId,
+        targetUserMobile: 'ADMIN',
+        title: 'Balance Payout Requested',
+        message: `${currentUser.fullName} (${currentUser.mobileNumber}) requested a payout of ₹${numAmount.toLocaleString('en-IN')}.${params.userNotes ? ` Note: ${params.userNotes}` : ''}`,
+        type: 'balance_request',
+        timestamp: nowIso,
+        read: false,
+        relatedBalanceRequestId: reqId,
+        amount: numAmount,
+        userMobile: currentUser.mobileNumber,
+        userName: currentUser.fullName,
+      })
+    );
+
+    // 2. Notification for user
     const notifId = 'NOTIF-' + Date.now();
     batch.set(
       doc(db, 'notifications', notifId),
@@ -1310,7 +1749,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const balInfo = getUserBalanceInfo(userMobile, userId);
     const available = balInfo.availableBalance;
     if (numAmount > available) {
-      throw new Error(`Amount ₹${numAmount.toLocaleString('en-IN')} cannot exceed available balance of ₹${available.toLocaleString('en-IN')}.`);
+      throw new Error(`Amount cannot be greater than the available balance of ₹${available.toLocaleString('en-IN')}.`);
     }
 
     const prevBalance = available;
@@ -1559,10 +1998,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     userMobile: string;
     userName: string;
     amount: number;
-    type: 'Balance Added' | 'Balance Adjustment';
+    type?: 'Balance Added' | 'Balance Adjustment';
+    reason?: string;
     notes?: string;
   }): Promise<void> => {
-    const { userId, userMobile, userName, amount, type, notes } = params;
+    const { userId, userMobile, userName, amount, type = 'Balance Added', reason = 'Manual Adjustment', notes } = params;
     const numAmount = Number(amount);
     if (isNaN(numAmount) || numAmount <= 0) {
       throw new Error('Amount must be greater than ₹0.');
@@ -1587,11 +2027,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       amount: numAmount,
       previousBalance: prevBalance,
       remainingBalance,
+      reason: reason,
       date: dateStr,
       time: timeStr,
       timestamp: nowIso,
       actor: 'ADMIN',
-      notes: notes || 'Balance credited by admin',
+      notes: notes || `Balance added: ${reason}`,
     };
 
     batch.set(doc(db, 'balance_transactions', txId), sanitizeForFirestore(txDoc));
@@ -1603,22 +2044,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
 
-    const notifId = 'NOTIF-' + Date.now();
-    const notifMsg = `₹${numAmount.toLocaleString('en-IN')} balance was added to your account credit. New balance: ₹${remainingBalance.toLocaleString('en-IN')}.${notes ? ` Note: ${notes}` : ''}`;
+    const notifId = 'NOTIF-BAL-' + Date.now();
+    const notifMsg = `₹${numAmount.toLocaleString('en-IN')} has been added to your balance. Reason: ${reason}. New Available Balance: ₹${remainingBalance.toLocaleString('en-IN')}.${notes ? ` Note: ${notes}` : ''}`;
 
     batch.set(doc(db, 'notifications', notifId), sanitizeForFirestore({
       id: notifId,
       targetUserMobile: userMobile,
       title: 'Balance Added',
       message: notifMsg,
-      type: 'payment_recorded',
+      type: 'balance_added',
+      reason: reason,
+      amount: numAmount,
+      newBalance: remainingBalance,
       timestamp: nowIso,
       read: false,
     }));
 
     await batch.commit();
 
-    showToast(`Added ₹${numAmount.toLocaleString('en-IN')} balance for ${userName}. New balance: ₹${remainingBalance.toLocaleString('en-IN')}`);
+    showToast(`Added ₹${numAmount.toLocaleString('en-IN')} to ${userName}'s balance (${reason}).`);
   };
 
   const adminSuspendUser = async (userId: string) => {
@@ -1646,6 +2090,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         allRequests,
         allUsers,
         notifications: userNotifications,
+        adminNotifications,
+        unreadAdminNotificationsCount,
+        unreadUserNotificationsCount,
+        markNotificationAsRead,
+        markAllNotificationsAsRead,
         groupPayments,
         balanceTransactions,
         balanceRequests,
@@ -1672,7 +2121,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         adminDeleteRequest,
         adminUpdateStatus,
         adminRecordPayment,
+        recordPayment: adminRecordPayment,
+        adminApplyOffer,
         adminProcessGroupPayment,
+        adminRecordGroupPaymentReceived,
         adminSuspendUser,
         adminUnsuspendUser,
         adminDeleteUser,

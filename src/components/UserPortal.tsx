@@ -7,6 +7,8 @@ import {
   calculateAccountSummary,
   isRequestRejected,
   getRequestPrice,
+  getOriginalPrice,
+  getOfferSavings,
   getRequestRemaining,
   getRequestPaid,
   getRequestPendingExtraCash,
@@ -38,6 +40,7 @@ import {
   X,
   Coins,
   ArrowDownToLine,
+  TrendingDown,
 } from 'lucide-react';
 import { BalanceLedgerView } from './BalanceLedgerView';
 import { RequestMoneyModal } from './RequestMoneyModal';
@@ -48,6 +51,9 @@ export const UserPortal: React.FC = () => {
     currentUser,
     userRequests,
     notifications,
+    unreadUserNotificationsCount,
+    markNotificationAsRead,
+    markAllNotificationsAsRead,
     balanceTransactions,
     settings,
     logoutUser,
@@ -64,6 +70,18 @@ export const UserPortal: React.FC = () => {
   const [selectedReq, setSelectedReq] = useState<OrderRequest | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
+
+  // Unread balance added notifications for real-time and offline popup notification
+  const unreadBalanceAddedNotifs = notifications.filter(
+    (n) => n.targetUserMobile === currentUser?.mobileNumber && n.type === 'balance_added' && !n.read
+  );
+  const activeBalancePopup = unreadBalanceAddedNotifs.length > 0 ? unreadBalanceAddedNotifs[0] : null;
+
+  // Unread special offer notifications for real-time and offline popup notification
+  const unreadOfferNotifs = notifications.filter(
+    (n) => n.targetUserMobile === currentUser?.mobileNumber && n.type === 'special_offer' && !n.read
+  );
+  const activeOfferPopup = unreadOfferNotifs.length > 0 ? unreadOfferNotifs[0] : null;
 
   // Profile Edit State
   const [isEditingProfile, setIsEditingProfile] = useState(false);
@@ -194,6 +212,20 @@ export const UserPortal: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveTab('notifications')}
+            className="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors relative flex items-center justify-center"
+            title="Notifications"
+            id="btn-user-notifications-bell"
+          >
+            <Bell className="w-4.5 h-4.5" />
+            {unreadUserNotificationsCount > 0 && (
+              <span className="absolute -top-1 -right-1 px-1.5 py-0.5 rounded-full bg-[#E53935] text-white font-extrabold text-[10px] min-w-[16px] text-center border-2 border-zinc-900 animate-pulse">
+                {unreadUserNotificationsCount}
+              </span>
+            )}
+          </button>
+
           <button
             onClick={() => setIsNewRequestOpen(true)}
             className="py-2 px-3.5 bg-gradient-to-r from-[#E53935] to-[#B71C1C] hover:brightness-110 text-white font-bold text-xs rounded-xl shadow-lg shadow-[#E53935]/20 flex items-center gap-1.5 transition-all"
@@ -500,9 +532,12 @@ export const UserPortal: React.FC = () => {
             ) : (
               <div className="space-y-3">
                 {filteredRequests.map((req) => {
-                  const actual = req.actualPrice || req.expectedPrice || 0;
-                  const paid = req.amountPaid || (req.status === 'Paid' ? actual : 0);
-                  const rem = req.remainingAmount ?? (req.status === 'Paid' ? 0 : Math.max(0, actual - paid));
+                  const actual = getRequestPrice(req);
+                  const paid = getRequestPaid(req);
+                  const rem = getRequestRemaining(req);
+                  const orig = getOriginalPrice(req);
+                  const savings = getOfferSavings(req);
+                  const hasOffer = req.offerApplied || (orig > 0 && actual < orig);
 
                   return (
                     <motion.div
@@ -522,6 +557,12 @@ export const UserPortal: React.FC = () => {
                             {req.requestType}
                           </span>
                           {getStatusBadge(req.status)}
+                          {hasOffer && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                              <Sparkles className="w-3 h-3 text-amber-400" />
+                              <span>Offer: Save {settings.currencySymbol}{savings.toLocaleString('en-IN')}</span>
+                            </span>
+                          )}
                         </div>
 
                         <p className="text-xs text-zinc-300 font-medium">{req.purpose}</p>
@@ -540,10 +581,29 @@ export const UserPortal: React.FC = () => {
                       </div>
 
                       <div className="flex items-center justify-between md:justify-end gap-6 border-t md:border-t-0 pt-3 md:pt-0 border-zinc-800/60">
-                        <div className="text-left md:text-right">
-                          <span className="text-xs text-zinc-500 font-bold block">
-                            Total: {settings.currencySymbol}{actual.toLocaleString('en-IN')}
-                          </span>
+                        <div className="text-left md:text-right space-y-0.5">
+                          {hasOffer ? (
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-1.5 md:justify-end">
+                                <span className="text-[10px] text-zinc-500 line-through">
+                                  Orig: {settings.currencySymbol}{orig.toLocaleString('en-IN')}
+                                </span>
+                                <span className="text-[10px] font-extrabold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                  SPECIAL OFFER
+                                </span>
+                              </div>
+                              <span className="text-xs font-black text-amber-400 block">
+                                Special Offer: {settings.currencySymbol}{actual.toLocaleString('en-IN')}
+                              </span>
+                              <span className="text-[10px] font-bold text-emerald-400 block">
+                                You Save: {settings.currencySymbol}{savings.toLocaleString('en-IN')}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-zinc-500 font-bold block">
+                              Total: {settings.currencySymbol}{actual.toLocaleString('en-IN')}
+                            </span>
+                          )}
                           <span className="text-sm font-extrabold text-white block">
                             Paid: {settings.currencySymbol}{paid.toLocaleString('en-IN')}
                           </span>
@@ -571,8 +631,8 @@ export const UserPortal: React.FC = () => {
                             return null;
                           })()}
                           {rem > 0 && (
-                            <span className="text-[10px] font-bold text-rose-400 block">
-                              Due: {settings.currencySymbol}{rem.toLocaleString('en-IN')}
+                            <span className="text-[11px] font-extrabold text-rose-400 block">
+                              Current Amount Due: {settings.currencySymbol}{rem.toLocaleString('en-IN')}
                             </span>
                           )}
                         </div>
@@ -685,10 +745,26 @@ export const UserPortal: React.FC = () => {
         {/* TAB 4: NOTIFICATIONS */}
         {activeTab === 'notifications' && (
           <div className="p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800/90 space-y-4">
-            <h3 className="text-base font-extrabold text-white flex items-center gap-2">
-              <Bell className="w-5 h-5 text-[#E53935]" />
-              Notifications & Updates
-            </h3>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                <Bell className="w-5 h-5 text-[#E53935]" />
+                <span>Notifications & Updates</span>
+                {unreadUserNotificationsCount > 0 && (
+                  <span className="px-2 py-0.5 rounded-full bg-[#E53935]/20 text-[#E53935] border border-[#E53935]/30 text-[10px] font-extrabold">
+                    {unreadUserNotificationsCount} unread
+                  </span>
+                )}
+              </h3>
+
+              {unreadUserNotificationsCount > 0 && (
+                <button
+                  onClick={() => markAllNotificationsAsRead(currentUser.mobileNumber)}
+                  className="py-1 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-xs font-bold transition-colors"
+                >
+                  Mark all as read
+                </button>
+              )}
+            </div>
 
             {notifications.length === 0 ? (
               <div className="p-8 text-center text-zinc-500 text-xs">
@@ -699,15 +775,90 @@ export const UserPortal: React.FC = () => {
                 {notifications.map((n) => (
                   <div
                     key={n.id}
-                    className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 text-xs space-y-1"
+                    className={`p-3.5 rounded-2xl border text-xs space-y-1.5 transition-all ${
+                      n.type === 'special_offer'
+                        ? 'bg-amber-950/20 border-amber-500/40 shadow-sm text-zinc-200'
+                        : n.read
+                        ? 'bg-zinc-950/60 border-zinc-800/80 text-zinc-400'
+                        : 'bg-zinc-950 border-emerald-500/40 shadow-sm text-zinc-200'
+                    }`}
                   >
                     <div className="flex items-center justify-between text-white font-bold">
-                      <span>{n.title}</span>
-                      <span className="text-[10px] text-zinc-500 font-normal">
-                        {new Date(n.timestamp).toLocaleString('en-IN')}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        {!n.read && (
+                          <span
+                            className={`w-2 h-2 rounded-full ${
+                              n.type === 'special_offer' ? 'bg-amber-400' : 'bg-emerald-400'
+                            }`}
+                          />
+                        )}
+                        {n.type === 'special_offer' && (
+                          <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        )}
+                        <span>{n.title}</span>
+                        {n.reason && (
+                          <span className="px-2 py-0.5 rounded-full bg-zinc-800 text-[10px] text-zinc-300 font-semibold">
+                            {n.reason}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-zinc-500 font-normal">
+                          {new Date(n.timestamp).toLocaleString('en-IN')}
+                        </span>
+                        {!n.read && (
+                          <button
+                            onClick={() => markNotificationAsRead(n.id)}
+                            className="text-[10px] text-zinc-400 hover:text-amber-400 font-bold underline"
+                          >
+                            Mark read
+                          </button>
+                        )}
+                      </div>
                     </div>
+
+                    {n.type === 'special_offer' && (n.originalPrice || n.offerPrice) && (
+                      <div className="p-2 rounded-xl bg-zinc-950 border border-amber-500/30 flex items-center justify-between text-[11px] font-bold">
+                        <div className="flex items-center gap-2">
+                          {n.originalPrice && (
+                            <span className="text-zinc-500 line-through">
+                              Orig: {settings.currencySymbol}{n.originalPrice.toLocaleString('en-IN')}
+                            </span>
+                          )}
+                          {n.offerPrice && (
+                            <span className="text-amber-400">
+                              Offer: {settings.currencySymbol}{n.offerPrice.toLocaleString('en-IN')}
+                            </span>
+                          )}
+                        </div>
+                        {n.savings && (
+                          <span className="text-emerald-400">
+                            Save {settings.currencySymbol}{n.savings.toLocaleString('en-IN')}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
                     <p className="text-zinc-300">{n.message}</p>
+
+                    {n.requestId && (
+                      <div className="pt-1 flex items-center justify-end">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const req = userRequests.find((r) => r.id === n.requestId);
+                            if (req) {
+                              setSelectedReq(req);
+                            }
+                            setActiveTab('requests');
+                          }}
+                          className="text-[10px] font-bold text-amber-400 hover:underline flex items-center gap-1"
+                        >
+                          <span>View Order #{n.requestId}</span>
+                          <ChevronRight className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1014,6 +1165,189 @@ export const UserPortal: React.FC = () => {
           />
         );
       })()}
+
+      {/* Real-time & Offline-Resilient Animated "Balance Added" Popup */}
+      <AnimatePresence>
+        {activeBalancePopup && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: -10 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              className="w-full max-w-md p-6 rounded-3xl bg-zinc-900 border border-emerald-500/40 shadow-2xl space-y-4 text-white"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center text-2xl shrink-0">
+                    🎉
+                  </div>
+                  <div>
+                    <span className="text-[10px] uppercase font-black tracking-widest text-emerald-400 block">
+                      Official Account Notice
+                    </span>
+                    <h3 className="text-lg font-extrabold text-white">Balance Added</h3>
+                  </div>
+                </div>
+                <button
+                  onClick={() => markNotificationAsRead(activeBalancePopup.id)}
+                  className="p-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors"
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-zinc-950 border border-emerald-500/20 space-y-2">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-xs text-zinc-400 font-medium">Added to Balance:</span>
+                  <span className="text-2xl font-black text-emerald-400">
+                    +{settings.currencySymbol}{(activeBalancePopup.amount || 0).toLocaleString('en-IN')}
+                  </span>
+                </div>
+                {activeBalancePopup.reason && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-zinc-400 font-medium">Reason:</span>
+                    <span className="text-white font-bold bg-zinc-900 px-2 py-0.5 rounded-md border border-zinc-800">
+                      {activeBalancePopup.reason}
+                    </span>
+                  </div>
+                )}
+                {activeBalancePopup.newBalance !== undefined && (
+                  <div className="flex items-center justify-between text-xs border-t border-zinc-800/80 pt-2 mt-2">
+                    <span className="text-zinc-400 font-medium">New Available Balance:</span>
+                    <span className="text-sm font-extrabold text-white">
+                      {settings.currencySymbol}{(activeBalancePopup.newBalance || 0).toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-xs text-zinc-300 leading-relaxed">
+                {activeBalancePopup.message}
+              </p>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  onClick={() => {
+                    markNotificationAsRead(activeBalancePopup.id);
+                    setActiveTab('balance');
+                  }}
+                  className="flex-1 py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-600/30 transition-all flex items-center justify-center gap-1.5"
+                >
+                  <Coins className="w-4 h-4" />
+                  <span>View Balance & History</span>
+                </button>
+                <button
+                  onClick={() => markNotificationAsRead(activeBalancePopup.id)}
+                  className="py-3 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white font-bold text-xs transition-colors"
+                >
+                  Got it
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* Animated Pop-in Notification: Special Supplier Offer */}
+        {activeOfferPopup && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-md bg-zinc-900 border border-amber-500/40 rounded-3xl shadow-2xl p-6 space-y-4 overflow-hidden"
+            >
+              {/* Glow Accent */}
+              <div className="absolute -top-16 -right-16 w-36 h-36 bg-amber-500/15 rounded-full blur-3xl pointer-events-none" />
+
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                    <Sparkles className="w-6 h-6 animate-pulse" />
+                  </div>
+                  <div>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/30 uppercase tracking-wider block w-fit mb-0.5">
+                      SPECIAL SUPPLIER OFFER
+                    </span>
+                    <h3 className="text-base font-extrabold text-white">
+                      Price Reduced On Your Order!
+                    </h3>
+                  </div>
+                </div>
+                <button
+                  onClick={() => markNotificationAsRead(activeOfferPopup.id)}
+                  className="p-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white transition-colors"
+                  title="Close"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Price Comparison Card */}
+              <div className="p-4 rounded-2xl bg-zinc-950 border border-amber-500/30 space-y-3">
+                <div className="flex items-center justify-between text-xs text-zinc-400">
+                  <span>Original Price:</span>
+                  <span className="line-through font-semibold text-zinc-400">
+                    {settings.currencySymbol}
+                    {(activeOfferPopup.originalPrice || activeOfferPopup.amount || 0).toLocaleString('en-IN')}
+                  </span>
+                </div>
+
+                <div className="flex items-baseline justify-between border-t border-zinc-800/80 pt-2">
+                  <span className="text-xs text-amber-400 font-extrabold flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    Special Offer Price:
+                  </span>
+                  <span className="text-2xl font-black text-white">
+                    {settings.currencySymbol}
+                    {(activeOfferPopup.offerPrice || activeOfferPopup.amount || 0).toLocaleString('en-IN')}
+                  </span>
+                </div>
+
+                {activeOfferPopup.savings && activeOfferPopup.savings > 0 && (
+                  <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-between text-xs font-black text-emerald-400">
+                    <span className="flex items-center gap-1">
+                      <TrendingDown className="w-4 h-4" />
+                      YOU SAVE:
+                    </span>
+                    <span className="text-sm">
+                      {settings.currencySymbol}{activeOfferPopup.savings.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-xs text-zinc-300 leading-relaxed">
+                {activeOfferPopup.message}
+              </p>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  onClick={() => {
+                    const reqToOpen = userRequests.find((r) => r.id === activeOfferPopup.requestId);
+                    markNotificationAsRead(activeOfferPopup.id);
+                    if (reqToOpen) {
+                      setSelectedReq(reqToOpen);
+                    }
+                    setActiveTab('requests');
+                  }}
+                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 text-black font-extrabold text-xs shadow-lg shadow-amber-500/25 transition-all flex items-center justify-center gap-1.5"
+                >
+                  <ShoppingBag className="w-4 h-4 text-black" />
+                  <span>View Updated Order</span>
+                </button>
+                <button
+                  onClick={() => markNotificationAsRead(activeOfferPopup.id)}
+                  className="py-3 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white font-bold text-xs transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

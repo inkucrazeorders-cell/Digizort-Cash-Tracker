@@ -2,13 +2,15 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../context/AppContext';
 import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
-import { OrderRequest, RequestStatus, AppUser } from '../types';
+import { OrderRequest, RequestStatus, AppUser, GroupPayment } from '../types';
 import {
   calculateAccountSummary,
   isRequestRejected,
   isRequestCancelled,
   isRequestEligibleForPayment,
   getRequestPrice,
+  getOriginalPrice,
+  getOfferSavings,
   getRequestPaid,
   getRequestRemaining,
   getRequestPendingExtraCash,
@@ -19,6 +21,9 @@ import { DigitalDocumentCard } from './DigitalDocumentCard';
 import { BalanceManagementModal } from './BalanceManagementModal';
 import { BalanceLedgerView } from './BalanceLedgerView';
 import { AdminBalanceRequestsView } from './AdminBalanceRequestsView';
+import { PaidAmountModal } from './PaidAmountModal';
+import { PayUserBalanceModal } from './PayUserBalanceModal';
+import { AdminOfferModal } from './AdminOfferModal';
 import {
   ShieldCheck,
   ShoppingBag,
@@ -51,6 +56,8 @@ import {
   Coins,
   Receipt,
   Eye,
+  Bell,
+  UserPlus,
 } from 'lucide-react';
 
 export const AdminPanel: React.FC = () => {
@@ -60,6 +67,11 @@ export const AdminPanel: React.FC = () => {
     groupPayments,
     balanceRequests,
     balanceTransactions,
+    adminNotifications,
+    unreadAdminNotificationsCount,
+    markNotificationAsRead,
+    markAllNotificationsAsRead,
+    adminAddBalanceAdjustment,
     settings,
     logoutUser,
     adminSuspendUser,
@@ -76,6 +88,17 @@ export const AdminPanel: React.FC = () => {
 
   const pendingBalanceRequestsCount = balanceRequests.filter((r) => r.status === 'Pending').length;
 
+  // Admin Notification Bell Dropdown State
+  const [showAdminNotifs, setShowAdminNotifs] = useState(false);
+
+  // Admin Add Balance Modal State
+  const [addBalanceModalUser, setAddBalanceModalUser] = useState<AppUser | null>(null);
+  const [addBalanceAmount, setAddBalanceAmount] = useState('');
+  const [addBalanceReason, setAddBalanceReason] = useState('Reward');
+  const [addBalanceCustomReason, setAddBalanceCustomReason] = useState('');
+  const [addBalanceNotes, setAddBalanceNotes] = useState('');
+  const [isSubmittingAddBalance, setIsSubmittingAddBalance] = useState(false);
+
   // Balance Action Modal State (Pay Balance / Use Balance)
   const [balanceModalUser, setBalanceModalUser] = useState<AppUser | null>(null);
   const [balanceModalMode, setBalanceModalMode] = useState<'pay' | 'use' | null>(null);
@@ -87,6 +110,21 @@ export const AdminPanel: React.FC = () => {
     'accept' | 'reject' | 'status' | 'payment' | 'delete' | null
   >(null);
 
+  // New Dedicated Paid & Pay User Balance Modals State
+  const [paidModalTarget, setPaidModalTarget] = useState<
+    | { type: 'request'; request: OrderRequest }
+    | { type: 'group'; groupPayment: GroupPayment }
+    | { type: 'new_group'; userId: string; userName: string; userMobile: string; requestIds: string[]; totalDue: number }
+    | null
+  >(null);
+
+  const [payUserBalanceData, setPayUserBalanceData] = useState<{
+    customer: { userId?: string; userMobile: string; userName: string };
+    currentBalance: number;
+    relatedRequestId?: string;
+    relatedGroupPaymentId?: string;
+  } | null>(null);
+
   // Group Payment State
   const [selectedGroupUserId, setSelectedGroupUserId] = useState<string>('');
   const [selectedGroupReqIds, setSelectedGroupReqIds] = useState<string[]>([]);
@@ -96,6 +134,9 @@ export const AdminPanel: React.FC = () => {
 
   // Document Card Inspection Modal
   const [inspectDocReq, setInspectDocReq] = useState<OrderRequest | null>(null);
+
+  // Supplier Offer / Special Price Adjustment Modal
+  const [offerModalRequest, setOfferModalRequest] = useState<OrderRequest | null>(null);
 
   // Filters for Active Requests
   const [reqSearch, setReqSearch] = useState('');
@@ -287,14 +328,109 @@ export const AdminPanel: React.FC = () => {
           </div>
         </div>
 
-        <button
-          onClick={logoutUser}
-          className="p-2 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors text-xs font-bold flex items-center gap-1.5"
-          id="btn-admin-logout"
-        >
-          <LogOut className="w-4 h-4 text-rose-400" />
-          <span>Exit Admin</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Notification Bell with Dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setShowAdminNotifs(!showAdminNotifs)}
+              className="p-2 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors relative flex items-center gap-1.5 text-xs font-bold"
+              id="btn-admin-notifications-bell"
+              title="Admin Alerts & Activity"
+            >
+              <Bell className="w-4 h-4 text-zinc-300" />
+              <span className="hidden sm:inline">Alerts</span>
+              {unreadAdminNotificationsCount > 0 && (
+                <span className="px-1.5 py-0.5 rounded-full bg-rose-600 text-white font-extrabold text-[10px] min-w-[18px] text-center border-2 border-zinc-900 animate-pulse">
+                  {unreadAdminNotificationsCount}
+                </span>
+              )}
+            </button>
+
+            {/* Notification Dropdown Panel */}
+            {showAdminNotifs && (
+              <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-3xl bg-zinc-900 border border-zinc-700 shadow-2xl p-4 z-50 space-y-3">
+                <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <Bell className="w-4 h-4 text-rose-400" />
+                    <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                      System Notifications
+                    </h4>
+                    {unreadAdminNotificationsCount > 0 && (
+                      <span className="px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[10px] font-extrabold">
+                        {unreadAdminNotificationsCount} new
+                      </span>
+                    )}
+                  </div>
+                  {unreadAdminNotificationsCount > 0 && (
+                    <button
+                      onClick={() => markAllNotificationsAsRead('ADMIN')}
+                      className="text-[10px] text-zinc-400 hover:text-rose-400 font-bold transition-colors underline"
+                    >
+                      Mark all read
+                    </button>
+                  )}
+                </div>
+
+                <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
+                  {adminNotifications.length === 0 ? (
+                    <div className="p-6 text-center text-zinc-500 text-xs">
+                      No notifications yet.
+                    </div>
+                  ) : (
+                    adminNotifications.slice(0, 20).map((n) => (
+                      <div
+                        key={n.id}
+                        onClick={() => {
+                          markNotificationAsRead(n.id);
+                          setShowAdminNotifs(false);
+                          if (n.type === 'new_request') {
+                            setAdminTab('requests');
+                            if (n.requestId) setReqSearch(n.requestId);
+                          } else if (n.type === 'balance_request') {
+                            setAdminTab('balance_requests');
+                          } else if (n.type === 'request_cancelled') {
+                            setAdminTab('rejected');
+                          } else if (n.type === 'new_user') {
+                            setAdminTab('users');
+                          }
+                        }}
+                        className={`p-3 rounded-2xl border text-xs space-y-1 cursor-pointer transition-all ${
+                          n.read
+                            ? 'bg-zinc-950/70 border-zinc-800/80 text-zinc-400 hover:border-zinc-700'
+                            : 'bg-zinc-950 border-rose-500/40 text-zinc-200 hover:border-rose-400 shadow-sm'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            {!n.read && <span className="w-2 h-2 rounded-full bg-rose-500" />}
+                            {n.type === 'new_request' && <ShoppingBag className="w-3.5 h-3.5 text-blue-400" />}
+                            {n.type === 'balance_request' && <Coins className="w-3.5 h-3.5 text-amber-400" />}
+                            {n.type === 'request_cancelled' && <Ban className="w-3.5 h-3.5 text-rose-400" />}
+                            {n.type === 'new_user' && <UserPlus className="w-3.5 h-3.5 text-purple-400" />}
+                            <span className="font-extrabold text-white text-[11px]">{n.title}</span>
+                          </div>
+                          <span className="text-[10px] text-zinc-500">
+                            {new Date(n.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-zinc-300 leading-snug">{n.message}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={logoutUser}
+            className="p-2 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white transition-colors text-xs font-bold flex items-center gap-1.5"
+            id="btn-admin-logout"
+          >
+            <LogOut className="w-4 h-4 text-rose-400" />
+            <span>Exit Admin</span>
+          </button>
+        </div>
       </header>
 
       {/* Main Container */}
@@ -518,6 +654,179 @@ export const AdminPanel: React.FC = () => {
               </div>
             </div>
 
+            {/* Audited System Database Reconciliation */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Card 1: Customer Accounts & Balances */}
+              <div className="p-5 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
+                <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-purple-400" />
+                    <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                      Customer Accounts
+                    </h4>
+                  </div>
+                  <button
+                    onClick={() => setAdminTab('users')}
+                    className="text-[10px] text-zinc-400 hover:text-white font-bold flex items-center gap-1 transition-colors"
+                  >
+                    <span>Manage</span>
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                </div>
+
+                <div className="space-y-2 text-xs">
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Total Registered Users:</span>
+                    <span className="font-extrabold text-white">{allUsers.length}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Active Accounts:</span>
+                    <span className="font-extrabold text-emerald-400">
+                      {allUsers.filter((u) => u.status === 'active').length}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Suspended Accounts:</span>
+                    <span className="font-extrabold text-rose-400">
+                      {allUsers.filter((u) => u.status === 'suspended').length}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Customers with Balance:</span>
+                    <span className="font-extrabold text-amber-400">
+                      {allUsers.filter((u) => (u.creditBalance || 0) > 0).length}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 pt-2">
+                    <span className="text-zinc-300 font-bold">Total Customer Balances:</span>
+                    <span className="font-extrabold text-amber-400">
+                      {settings.currencySymbol}{totalExtraCash.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 2: Order Requests Lifecycle */}
+              <div className="p-5 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
+                <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <ShoppingBag className="w-4 h-4 text-blue-400" />
+                    <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                      Requests Lifecycle
+                    </h4>
+                  </div>
+                  <button
+                    onClick={() => setAdminTab('requests')}
+                    className="text-[10px] text-zinc-400 hover:text-white font-bold flex items-center gap-1 transition-colors"
+                  >
+                    <span>View All</span>
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                </div>
+
+                <div className="space-y-2 text-xs">
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Total Requests:</span>
+                    <span className="font-extrabold text-white">{allRequests.length}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Pending Review:</span>
+                    <span className="font-extrabold text-blue-400">
+                      {allRequests.filter((r) => r.status === 'Pending Review').length}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Accepted Requests:</span>
+                    <span className="font-extrabold text-indigo-400">
+                      {statsSummary.acceptedRequests}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Processing / In Progress:</span>
+                    <span className="font-extrabold text-cyan-400">
+                      {statsSummary.processingRequests}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Completed Orders:</span>
+                    <span className="font-extrabold text-emerald-400">
+                      {statsSummary.completedRequests}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Rejected Requests:</span>
+                    <span className="font-extrabold text-rose-400">
+                      {statsSummary.rejectedRequests}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1">
+                    <span className="text-zinc-400">Cancelled Requests:</span>
+                    <span className="font-extrabold text-zinc-400">
+                      {statsSummary.cancelledRequests}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 3: Payments & Balance Payouts */}
+              <div className="p-5 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
+                <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                  <div className="flex items-center gap-2">
+                    <CreditCard className="w-4 h-4 text-emerald-400" />
+                    <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                      Payments & Settlements
+                    </h4>
+                  </div>
+                  <button
+                    onClick={() => setAdminTab('balance_requests')}
+                    className="text-[10px] text-zinc-400 hover:text-white font-bold flex items-center gap-1 transition-colors"
+                  >
+                    <span>Payouts</span>
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                </div>
+
+                <div className="space-y-2 text-xs">
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Total Payments Recorded:</span>
+                    <span className="font-extrabold text-white">
+                      {statsSummary.totalPaymentsCount}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Total Collected:</span>
+                    <span className="font-extrabold text-emerald-400">
+                      {settings.currencySymbol}{totalCollected.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Total Pending Balance:</span>
+                    <span className="font-extrabold text-rose-400">
+                      {settings.currencySymbol}{totalPending.toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Group Payments Settled:</span>
+                    <span className="font-extrabold text-emerald-400">
+                      {groupPayments.length} batches
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
+                    <span className="text-zinc-400">Pending Payout Requests:</span>
+                    <span className="font-extrabold text-amber-400">
+                      {pendingBalanceRequestsCount} ({settings.currencySymbol}{balanceRequests.filter(b => b.status === 'Pending').reduce((s, b) => s + b.amount, 0).toLocaleString('en-IN')})
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-1">
+                    <span className="text-zinc-400">Balances Returned / Paid:</span>
+                    <span className="font-extrabold text-emerald-400">
+                      {settings.currencySymbol}{(statsSummary.totalExtraCashReturned || 0).toLocaleString('en-IN')}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Recent Activity Log */}
             <div className="p-6 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4">
               <h3 className="text-sm font-extrabold text-white uppercase tracking-wider">
@@ -675,94 +984,190 @@ export const AdminPanel: React.FC = () => {
                       </div>
 
                       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 border-t lg:border-t-0 pt-3 lg:pt-0 border-zinc-800">
-                        <div className="text-left sm:text-right text-xs">
-                          <span className="text-zinc-400 block font-bold">
-                            Total: {settings.currencySymbol}{actual.toLocaleString('en-IN')}
-                          </span>
-                          <span className="text-emerald-400 font-extrabold block">
-                            Paid: {settings.currencySymbol}{paid.toLocaleString('en-IN')}
-                          </span>
-                          {rem > 0 ? (
-                            <span className="text-rose-400 font-bold block">
-                              Balance: {settings.currencySymbol}{rem.toLocaleString('en-IN')}
-                            </span>
-                          ) : (
-                            <span className="text-emerald-400 text-[10px] font-bold block">
-                              Fully Settled
-                            </span>
-                          )}
-                        </div>
+                        {(() => {
+                          const reqUserBal = getUserBalanceInfo(req.userMobile, req.userId);
+                          const reqAvailableBal = reqUserBal.availableBalance;
+                          const hasBalToReturn = rem === 0 && reqAvailableBal > 0;
+                          const isBalCleared = rem === 0 && reqAvailableBal === 0 && ((req.extraCashPaid || 0) > 0 || (req.extraCash || 0) > 0);
 
-                        {/* Admin Action Buttons */}
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {req.status === 'Pending Review' && (
+                          return (
                             <>
-                              <button
-                                onClick={() => {
-                                  setSelectedReq(req);
-                                  setModalAction('accept');
-                                }}
-                                className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md transition-all"
-                              >
-                                Accept
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setSelectedReq(req);
-                                  setModalAction('reject');
-                                }}
-                                className="py-2 px-3 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/30 font-bold text-xs rounded-xl transition-all"
-                              >
-                                Reject
-                              </button>
+                              <div className="text-left sm:text-right text-xs">
+                                {req.offerApplied || (req.currentOrderAmount && req.originalRequestedAmount && req.currentOrderAmount < req.originalRequestedAmount) ? (
+                                  <div>
+                                    <span className="text-[10px] text-zinc-500 line-through block font-medium">
+                                      Orig: {settings.currencySymbol}{getOriginalPrice(req).toLocaleString('en-IN')}
+                                    </span>
+                                    <span className="text-amber-400 block font-black text-xs flex items-center justify-start sm:justify-end gap-1">
+                                      <Sparkles className="w-3 h-3 text-amber-400 shrink-0" />
+                                      Offer: {settings.currencySymbol}{actual.toLocaleString('en-IN')}
+                                    </span>
+                                    <span className="text-[10px] text-emerald-400 font-bold block">
+                                      Saved: {settings.currencySymbol}{getOfferSavings(req).toLocaleString('en-IN')}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span className="text-zinc-400 block font-bold">
+                                    Total: {settings.currencySymbol}{actual.toLocaleString('en-IN')}
+                                  </span>
+                                )}
+                                <span className="text-emerald-400 font-extrabold block">
+                                  Paid: {settings.currencySymbol}{paid.toLocaleString('en-IN')}
+                                </span>
+                                {rem > 0 ? (
+                                  <span className="text-rose-400 font-bold block">
+                                    Balance: {settings.currencySymbol}{rem.toLocaleString('en-IN')}
+                                  </span>
+                                ) : hasBalToReturn ? (
+                                  <span className="text-amber-400 font-bold text-[11px] block">
+                                    Paid — {settings.currencySymbol}{reqAvailableBal.toLocaleString('en-IN')} Return Due
+                                  </span>
+                                ) : isBalCleared ? (
+                                  <span className="text-emerald-400 text-[10px] font-bold block">
+                                    Paid (Balance Cleared)
+                                  </span>
+                                ) : (
+                                  <span className="text-emerald-400 text-[10px] font-bold block">
+                                    Fully Settled
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* Admin Action Buttons */}
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                {req.status === 'Pending Review' && (
+                                  <>
+                                    <button
+                                      onClick={() => {
+                                        setSelectedReq(req);
+                                        setModalAction('accept');
+                                      }}
+                                      className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-xl shadow-md transition-all"
+                                    >
+                                      Accept
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        setSelectedReq(req);
+                                        setModalAction('reject');
+                                      }}
+                                      className="py-2 px-3 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/30 font-bold text-xs rounded-xl transition-all"
+                                    >
+                                      Reject
+                                    </button>
+                                  </>
+                                )}
+
+                                <button
+                                  onClick={() => {
+                                    setSelectedReq(req);
+                                    setModalAction('status');
+                                  }}
+                                  className="py-2 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold text-xs rounded-xl transition-colors"
+                                >
+                                  Update Status
+                                </button>
+
+                                {/* APPLY OFFER / SPECIAL PRICE ADJUSTMENT BUTTON */}
+                                {!isRequestRejected(req) && !isRequestCancelled(req) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setOfferModalRequest(req)}
+                                    className="py-2 px-3 bg-amber-500/15 hover:bg-amber-500 text-amber-300 hover:text-black border border-amber-500/30 font-bold text-xs rounded-xl transition-all flex items-center gap-1.5 active:scale-[0.98]"
+                                    id={`btn-apply-offer-${req.id}`}
+                                    title="Apply Supplier Offer / Adjust Price"
+                                  >
+                                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                                    <span>{req.offerApplied ? 'Adjust Offer' : 'Apply Offer'}</span>
+                                  </button>
+                                )}
+
+                                {/* 1. PAID BUTTON (Enter Amount Received) */}
+                                {rem > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPaidModalTarget({ type: 'request', request: req })}
+                                    className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-md shadow-emerald-600/20 transition-all flex items-center gap-1.5 active:scale-[0.98]"
+                                    id={`btn-paid-request-${req.id}`}
+                                    title={`Enter Amount Received for ${settings.currencySymbol}{rem.toLocaleString('en-IN')}`}
+                                  >
+                                    <DollarSign className="w-3.5 h-3.5" />
+                                    <span>Paid</span>
+                                  </button>
+                                )}
+
+                                {/* 2. PAY USER BALANCE BUTTON */}
+                                {hasBalToReturn && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setPayUserBalanceData({
+                                        customer: {
+                                          userId: req.userId,
+                                          userMobile: req.userMobile,
+                                          userName: req.userName,
+                                        },
+                                        currentBalance: reqAvailableBal,
+                                        relatedRequestId: req.id,
+                                      })
+                                    }
+                                    className="py-2 px-3.5 bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-xs rounded-xl shadow-md shadow-amber-600/20 transition-all flex items-center gap-1.5 active:scale-[0.98]"
+                                    id={`btn-pay-user-balance-${req.id}`}
+                                    title={`Return balance of ${settings.currencySymbol}${reqAvailableBal.toLocaleString('en-IN')} to customer`}
+                                  >
+                                    <Coins className="w-3.5 h-3.5" />
+                                    <span>Pay User Balance</span>
+                                  </button>
+                                )}
+
+                                {/* 3. BALANCE CLEARED BADGE */}
+                                {isBalCleared && (
+                                  <span className="px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-extrabold flex items-center gap-1">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    <span>Balance Cleared</span>
+                                  </span>
+                                )}
+
+                                {/* 4. RECORD PAYMENT BUTTON (Calculated Amount) */}
+                                {rem > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedReq(req);
+                                      setModalAction('payment');
+                                    }}
+                                    className="py-2 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold text-xs rounded-xl transition-colors flex items-center gap-1.5"
+                                    id={`btn-record-payment-${req.id}`}
+                                    title="Open Record Payment (Calculated amount)"
+                                  >
+                                    <CreditCard className="w-3.5 h-3.5 text-zinc-400" />
+                                    <span>Record Payment</span>
+                                  </button>
+                                )}
+
+                                <button
+                                  onClick={() => {
+                                    setSelectedReq(req);
+                                    setModalAction('delete');
+                                  }}
+                                  className="py-2 px-3 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 font-bold text-xs rounded-xl transition-all flex items-center gap-1"
+                                  title="Delete Request"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Delete</span>
+                                </button>
+
+                                <button
+                                  onClick={() => setInspectDocReq(req)}
+                                  className="py-2 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white font-bold text-xs rounded-xl transition-colors flex items-center gap-1"
+                                  title="View Document & Share"
+                                >
+                                  <FileText className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             </>
-                          )}
-
-                          <button
-                            onClick={() => {
-                              setSelectedReq(req);
-                              setModalAction('status');
-                            }}
-                            className="py-2 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold text-xs rounded-xl transition-colors"
-                          >
-                            Update Status
-                          </button>
-
-                          {rem > 0 && (
-                            <button
-                              onClick={() => {
-                                setSelectedReq(req);
-                                setModalAction('payment');
-                              }}
-                              className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-md shadow-emerald-600/20 transition-all flex items-center gap-1.5 active:scale-[0.98]"
-                              id={`btn-mark-paid-cash-list-${req.id}`}
-                              title={`Mark balance of ${settings.currencySymbol}${rem.toLocaleString('en-IN')} as paid in cash`}
-                            >
-                              <DollarSign className="w-3.5 h-3.5" />
-                              <span>Mark Paid (Cash)</span>
-                            </button>
-                          )}
-
-                          <button
-                            onClick={() => {
-                              setSelectedReq(req);
-                              setModalAction('delete');
-                            }}
-                            className="py-2 px-3 bg-rose-500/10 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 font-bold text-xs rounded-xl transition-all flex items-center gap-1"
-                            title="Delete Request"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>Delete</span>
-                          </button>
-
-                          <button
-                            onClick={() => setInspectDocReq(req)}
-                            className="py-2 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white font-bold text-xs rounded-xl transition-colors flex items-center gap-1"
-                            title="View Document & Share"
-                          >
-                            <FileText className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                          );
+                        })()}
                       </div>
                     </motion.div>
                   );
@@ -1048,9 +1453,32 @@ export const AdminPanel: React.FC = () => {
 
                         {/* Cash Input */}
                         <div className="space-y-1.5">
-                          <label className="text-xs font-bold text-zinc-300">
-                            Cash Received from Customer ({settings.currencySymbol}) *
-                          </label>
+                          <div className="flex items-center justify-between">
+                            <label className="text-xs font-bold text-zinc-300">
+                              Cash Received from Customer ({settings.currencySymbol}) *
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (currentCustomer) {
+                                  setPaidModalTarget({
+                                    type: 'new_group',
+                                    userId: currentCustomer.id,
+                                    userName: currentCustomer.fullName,
+                                    userMobile: currentCustomer.mobileNumber,
+                                    requestIds: selectedGroupReqIds,
+                                    totalDue: totalDueForSelected,
+                                  });
+                                }
+                              }}
+                              className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-[11px] rounded-lg shadow-sm flex items-center gap-1 active:scale-[0.98]"
+                              id="btn-paid-modal-new-group"
+                              title="Open Paid amount modal for this group"
+                            >
+                              <DollarSign className="w-3 h-3" />
+                              <span>Paid</span>
+                            </button>
+                          </div>
                           <div className="relative">
                             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500 font-bold">
                               {settings.currencySymbol}
@@ -1211,6 +1639,67 @@ export const AdminPanel: React.FC = () => {
                           <span>{new Date(gp.createdAt).toLocaleString('en-IN')}</span>
                           {gp.notes && <span>Notes: {gp.notes}</span>}
                         </div>
+
+                        {/* Group Actions: Paid / Pay User Balance / Balance Cleared */}
+                        {(() => {
+                          const gpDue = gp.totalDue || gp.amountSettled || 0;
+                          const gpSettled = gp.amountSettled || 0;
+                          const gpRemaining = Math.max(0, gpDue - gpSettled);
+                          const gpUserBal = getUserBalanceInfo(gp.userMobile, gp.userId);
+                          const gpAvailableBal = gpUserBal.availableBalance;
+                          const hasGpBalToReturn = gpRemaining === 0 && gpAvailableBal > 0;
+                          const isGpCleared = gpRemaining === 0 && gpAvailableBal === 0 && ((gp.extraCashPaid || 0) > 0 || (gp.extraCash || 0) > 0);
+
+                          return (
+                            <div className="flex items-center gap-2 pt-1 justify-end">
+                              {/* 1. Paid button if group is underpaid */}
+                              {gpRemaining > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPaidModalTarget({ type: 'group', groupPayment: gp })}
+                                  className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-sm flex items-center gap-1.5 active:scale-[0.98]"
+                                  id={`btn-paid-group-${gp.id}`}
+                                  title="Record payment received for this group"
+                                >
+                                  <DollarSign className="w-3.5 h-3.5" />
+                                  <span>Paid</span>
+                                </button>
+                              )}
+
+                              {/* 2. Pay User Balance if customer has pending credit to return */}
+                              {hasGpBalToReturn && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPayUserBalanceData({
+                                      customer: {
+                                        userId: gp.userId,
+                                        userMobile: gp.userMobile,
+                                        userName: gp.userName,
+                                      },
+                                      currentBalance: gpAvailableBal,
+                                      relatedGroupPaymentId: gp.id,
+                                    })
+                                  }
+                                  className="py-1.5 px-3 bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-xs rounded-xl shadow-sm flex items-center gap-1.5 active:scale-[0.98]"
+                                  id={`btn-pay-user-balance-group-${gp.id}`}
+                                  title="Return user balance to customer"
+                                >
+                                  <Coins className="w-3.5 h-3.5" />
+                                  <span>Pay User Balance</span>
+                                </button>
+                              )}
+
+                              {/* 3. Balance Cleared Badge */}
+                              {isGpCleared && (
+                                <span className="px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-extrabold flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  <span>Balance Cleared</span>
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     ))}
                   </div>
@@ -1528,12 +2017,28 @@ export const AdminPanel: React.FC = () => {
                       </div>
 
                       {/* User Actions */}
-                      <div className="pt-3 border-t border-zinc-800 flex items-center justify-between gap-2">
+                      <div className="pt-3 border-t border-zinc-800 flex items-center justify-between gap-2 flex-wrap">
                         <button
                           onClick={() => setSelectedUserDetail(usr)}
                           className="py-2 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold text-xs rounded-xl transition-colors flex-1"
                         >
                           View History
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setAddBalanceModalUser(usr);
+                            setAddBalanceAmount('');
+                            setAddBalanceReason('Reward');
+                            setAddBalanceCustomReason('');
+                            setAddBalanceNotes('');
+                          }}
+                          className="py-2 px-3 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white font-bold text-xs rounded-xl transition-colors flex items-center gap-1 border border-emerald-500/30"
+                          title="Add balance / reward"
+                          id={`btn-add-balance-${usr.id}`}
+                        >
+                          <PlusCircle className="w-3.5 h-3.5" />
+                          <span>Add Balance</span>
                         </button>
 
                         {usr.status === 'active' ? (
@@ -1712,6 +2217,21 @@ export const AdminPanel: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => {
+                      setAddBalanceModalUser(selectedUserDetail);
+                      setAddBalanceAmount('');
+                      setAddBalanceReason('Reward');
+                      setAddBalanceCustomReason('');
+                      setAddBalanceNotes('');
+                    }}
+                    className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all"
+                    id="btn-modal-add-balance"
+                  >
+                    <PlusCircle className="w-3.5 h-3.5" />
+                    <span>Add Balance</span>
+                  </button>
+
                   {availableBalance > 0 && (
                     <>
                       <button
@@ -1719,7 +2239,7 @@ export const AdminPanel: React.FC = () => {
                           setBalanceModalUser(selectedUserDetail);
                           setBalanceModalMode('pay');
                         }}
-                        className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all"
+                        className="py-2 px-3.5 bg-emerald-600/30 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 font-extrabold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all"
                         id="btn-modal-pay-balance"
                       >
                         <DollarSign className="w-3.5 h-3.5" />
@@ -1902,19 +2422,62 @@ export const AdminPanel: React.FC = () => {
                               )}
 
                               {!isRejected && rem > 0 && (
-                                <button
-                                  onClick={() => {
-                                    setSelectedReq(r);
-                                    setModalAction('payment');
-                                  }}
-                                  className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-[11px] rounded-lg shadow-sm flex items-center gap-1 active:scale-[0.98]"
-                                  id={`btn-user-pay-cash-${r.id}`}
-                                  title="Mark paid in cash"
-                                >
-                                  <DollarSign className="w-3 h-3" />
-                                  <span>Paid Cash</span>
-                                </button>
+                                <>
+                                  <button
+                                    onClick={() => setPaidModalTarget({ type: 'request', request: r })}
+                                    className="py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-[11px] rounded-lg shadow-sm flex items-center gap-1 active:scale-[0.98]"
+                                    id={`btn-user-paid-${r.id}`}
+                                    title="Enter amount received"
+                                  >
+                                    <DollarSign className="w-3 h-3" />
+                                    <span>Paid</span>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setSelectedReq(r);
+                                      setModalAction('payment');
+                                    }}
+                                    className="py-1 px-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-[11px] rounded-lg"
+                                    title="Record payment"
+                                  >
+                                    Record
+                                  </button>
+                                </>
                               )}
+
+                              {!isRejected && rem === 0 && (() => {
+                                const reqBal = getUserBalanceInfo(r.userMobile, r.userId);
+                                if (reqBal.availableBalance > 0) {
+                                  return (
+                                    <button
+                                      onClick={() =>
+                                        setPayUserBalanceData({
+                                          customer: {
+                                            userId: r.userId,
+                                            userMobile: r.userMobile,
+                                            userName: r.userName,
+                                          },
+                                          currentBalance: reqBal.availableBalance,
+                                          relatedRequestId: r.id,
+                                        })
+                                      }
+                                      className="py-1 px-2.5 bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-[11px] rounded-lg shadow-sm flex items-center gap-1 active:scale-[0.98]"
+                                      title="Pay user balance"
+                                    >
+                                      <Coins className="w-3 h-3" />
+                                      <span>Pay Balance</span>
+                                    </button>
+                                  );
+                                }
+                                if (reqBal.availableBalance === 0 && (r.extraCashPaid || (r.extraCash || 0) > 0)) {
+                                  return (
+                                    <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[9px] font-extrabold">
+                                      Balance Cleared
+                                    </span>
+                                  );
+                                }
+                                return null;
+                              })()}
 
                               <button
                                 onClick={() => {
@@ -1979,6 +2542,246 @@ export const AdminPanel: React.FC = () => {
           }}
         />
       )}
+
+      {/* New Paid Amount Modal */}
+      {paidModalTarget && (
+        <PaidAmountModal
+          isOpen={!!paidModalTarget}
+          onClose={() => setPaidModalTarget(null)}
+          target={paidModalTarget}
+          onSuccess={() => {
+            setPaidModalTarget(null);
+          }}
+        />
+      )}
+
+      {/* New Pay User Balance Modal */}
+      {payUserBalanceData && (
+        <PayUserBalanceModal
+          isOpen={!!payUserBalanceData}
+          onClose={() => setPayUserBalanceData(null)}
+          customer={payUserBalanceData.customer}
+          currentBalance={payUserBalanceData.currentBalance}
+          relatedRequestId={payUserBalanceData.relatedRequestId}
+          relatedGroupPaymentId={payUserBalanceData.relatedGroupPaymentId}
+          onSuccess={() => {
+            setPayUserBalanceData(null);
+          }}
+        />
+      )}
+
+      {/* Add Balance to User Modal */}
+      {addBalanceModalUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-zinc-950/80 backdrop-blur-md overflow-y-auto">
+          <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-5 shadow-2xl relative">
+            <button
+              onClick={() => {
+                if (!isSubmittingAddBalance) setAddBalanceModalUser(null);
+              }}
+              className="absolute top-5 right-5 p-2 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
+                <Coins className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-extrabold text-white">Add Balance to User</h3>
+                <p className="text-xs text-zinc-400">
+                  Credit funds, bonuses, rewards or manual adjustments
+                </p>
+              </div>
+            </div>
+
+            {/* Target Customer Info */}
+            <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800/80 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-zinc-400">Customer:</span>
+                <span className="text-xs font-extrabold text-white">{addBalanceModalUser.fullName}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-zinc-400">Mobile:</span>
+                <span className="text-xs font-bold text-zinc-300">{addBalanceModalUser.mobileNumber}</span>
+              </div>
+              <div className="flex items-center justify-between pt-1 border-t border-zinc-800/60">
+                <span className="text-xs text-zinc-400">Current Balance:</span>
+                <span className="text-xs font-extrabold text-emerald-400">
+                  {settings.currencySymbol}
+                  {getUserBalanceInfo(addBalanceModalUser.mobileNumber, addBalanceModalUser.id).availableBalance.toLocaleString('en-IN')}
+                </span>
+              </div>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const num = Number(addBalanceAmount);
+                if (isNaN(num) || num <= 0) {
+                  showToast('Please enter a valid amount greater than ₹0');
+                  return;
+                }
+                const chosenReason =
+                  addBalanceReason === 'Other'
+                    ? addBalanceCustomReason.trim() || 'Manual Adjustment'
+                    : addBalanceReason;
+
+                setIsSubmittingAddBalance(true);
+                try {
+                  await adminAddBalanceAdjustment({
+                    userId: addBalanceModalUser.id,
+                    userMobile: addBalanceModalUser.mobileNumber,
+                    userName: addBalanceModalUser.fullName,
+                    amount: num,
+                    type: 'Balance Added',
+                    reason: chosenReason,
+                    notes: addBalanceNotes.trim() || undefined,
+                  });
+                  setAddBalanceModalUser(null);
+                  setAddBalanceAmount('');
+                  setAddBalanceReason('Reward');
+                  setAddBalanceCustomReason('');
+                  setAddBalanceNotes('');
+                } catch (err: any) {
+                  showToast(err.message || 'Failed to add balance');
+                } finally {
+                  setIsSubmittingAddBalance(false);
+                }
+              }}
+              className="space-y-4"
+            >
+              {/* Amount Input */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-zinc-300">
+                  Amount to Add ({settings.currencySymbol}) *
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500 font-bold text-sm">
+                    {settings.currencySymbol}
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="any"
+                    required
+                    value={addBalanceAmount}
+                    onChange={(e) => setAddBalanceAmount(e.target.value)}
+                    placeholder="e.g. 100"
+                    className="w-full pl-8 pr-4 py-2.5 rounded-xl bg-zinc-950 border border-zinc-700 text-white font-bold text-sm focus:outline-none focus:border-emerald-500"
+                    autoFocus
+                  />
+                </div>
+              </div>
+
+              {/* Reason Dropdown */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-zinc-300">
+                  Reason for Balance Addition *
+                </label>
+                <select
+                  value={addBalanceReason}
+                  onChange={(e) => setAddBalanceReason(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-700 text-white text-xs font-medium focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="Reward">Reward</option>
+                  <option value="Event Reward">Event Reward</option>
+                  <option value="Bonus">Bonus</option>
+                  <option value="Manual Adjustment">Manual Adjustment</option>
+                  <option value="Refund">Refund</option>
+                  <option value="Other">Other (Custom)</option>
+                </select>
+              </div>
+
+              {addBalanceReason === 'Other' && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-zinc-300">
+                    Custom Reason *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={addBalanceCustomReason}
+                    onChange={(e) => setAddBalanceCustomReason(e.target.value)}
+                    placeholder="Enter reason..."
+                    className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-white text-xs font-medium focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              )}
+
+              {/* Optional Notes */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-zinc-300">
+                  Notes / Reference (Optional)
+                </label>
+                <textarea
+                  value={addBalanceNotes}
+                  onChange={(e) => setAddBalanceNotes(e.target.value)}
+                  placeholder="Optional internal note or message to customer..."
+                  rows={2}
+                  className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-700 text-white text-xs focus:outline-none focus:border-emerald-500 resize-none"
+                />
+              </div>
+
+              {/* Live Preview */}
+              {(() => {
+                const num = Number(addBalanceAmount);
+                if (!isNaN(num) && num > 0) {
+                  const cur = getUserBalanceInfo(
+                    addBalanceModalUser.mobileNumber,
+                    addBalanceModalUser.id
+                  ).availableBalance;
+                  const newBal = cur + num;
+                  return (
+                    <div className="p-3 rounded-2xl bg-emerald-950/20 border border-emerald-500/30 text-xs space-y-1">
+                      <div className="flex justify-between text-zinc-400">
+                        <span>Current Balance:</span>
+                        <span>{settings.currencySymbol}{cur.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between text-emerald-400 font-bold">
+                        <span>Adding:</span>
+                        <span>+{settings.currencySymbol}{num.toLocaleString('en-IN')}</span>
+                      </div>
+                      <div className="flex justify-between text-white font-extrabold border-t border-emerald-500/20 pt-1">
+                        <span>New Total Balance:</span>
+                        <span>{settings.currencySymbol}{newBal.toLocaleString('en-IN')}</span>
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setAddBalanceModalUser(null)}
+                  disabled={isSubmittingAddBalance}
+                  className="py-2.5 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-xs transition-colors flex-1"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingAddBalance}
+                  className="py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-extrabold text-xs shadow-lg shadow-emerald-600/25 transition-all flex-[2] flex items-center justify-center gap-1.5"
+                  id="btn-confirm-add-balance"
+                >
+                  <PlusCircle className="w-4 h-4" />
+                  <span>{isSubmittingAddBalance ? 'Adding...' : 'Confirm Add Balance'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Supplier Offer / Special Price Adjustment Modal */}
+      <AdminOfferModal
+        isOpen={!!offerModalRequest}
+        request={offerModalRequest}
+        onClose={() => setOfferModalRequest(null)}
+      />
     </div>
   );
 };

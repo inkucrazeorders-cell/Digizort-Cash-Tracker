@@ -6,6 +6,13 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import confetti from 'canvas-confetti';
 import {
+  getRequestPrice,
+  getOriginalPrice,
+  getOfferSavings,
+  getRequestPaid,
+  getRequestRemaining,
+} from '../lib/calculations';
+import {
   Download,
   Share2,
   FileText,
@@ -23,6 +30,7 @@ import {
   Coins,
   X,
   CreditCard,
+  TrendingDown,
 } from 'lucide-react';
 
 interface DigitalDocumentCardProps {
@@ -74,9 +82,12 @@ export const DigitalDocumentCard: React.FC<DigitalDocumentCardProps> = ({
     year: 'numeric',
   });
 
-  const actualAmount = currentTransaction.actualPrice || currentTransaction.amount || currentTransaction.expectedPrice || 0;
-  const paidAmount = currentTransaction.amountPaid || (currentTransaction.status === 'Paid' ? actualAmount : 0);
-  const remainingAmount = currentTransaction.remainingAmount ?? (currentTransaction.status === 'Paid' ? 0 : Math.max(0, actualAmount - paidAmount));
+  const actualAmount = getRequestPrice(currentTransaction);
+  const originalAmount = getOriginalPrice(currentTransaction);
+  const offerSavings = getOfferSavings(currentTransaction);
+  const hasOffer = currentTransaction.offerApplied || (originalAmount > 0 && actualAmount < originalAmount);
+  const paidAmount = getRequestPaid(currentTransaction);
+  const remainingAmount = getRequestRemaining(currentTransaction);
 
   const userBalInfo = getUserBalanceInfo(currentTransaction.userMobile, currentTransaction.userId);
   const customerAvailableCredit = userBalInfo.availableBalance;
@@ -580,6 +591,21 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
           </div>
         </div>
 
+        {/* Special Offer Notification Banner inside Document Statement */}
+        {hasOffer && (
+          <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 text-amber-300 font-extrabold">
+              <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                Special Offer Applied: Reduced from {settings.currencySymbol}{originalAmount.toLocaleString('en-IN')} to {settings.currencySymbol}{actualAmount.toLocaleString('en-IN')}.
+              </span>
+            </div>
+            <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-black text-xs shrink-0">
+              Saved {settings.currencySymbol}{offerSavings.toLocaleString('en-IN')}
+            </span>
+          </div>
+        )}
+
         {/* Pricing Summary Box */}
         <div className={`p-4 rounded-2xl bg-gradient-to-r from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 grid gap-2 text-center ${
           customerAvailableCredit > 0 || currentTransaction.extraCash || currentTransaction.extraCashPaid || userBalInfo.hasTransactions
@@ -588,12 +614,19 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
         }`}>
           <div>
             <span className="text-[10px] font-bold text-zinc-500 uppercase block mb-1">
-              Total Price
+              {hasOffer ? 'Offer Price' : 'Total Price'}
             </span>
-            <span className="text-base font-extrabold text-white block">
-              {settings.currencySymbol}
-              {actualAmount.toLocaleString('en-IN')}
-            </span>
+            <div className="space-y-0.5">
+              {hasOffer && (
+                <span className="text-[11px] text-zinc-500 line-through block font-medium">
+                  {settings.currencySymbol}{originalAmount.toLocaleString('en-IN')}
+                </span>
+              )}
+              <span className={`text-base font-extrabold block ${hasOffer ? 'text-amber-400' : 'text-white'}`}>
+                {settings.currencySymbol}
+                {actualAmount.toLocaleString('en-IN')}
+              </span>
+            </div>
           </div>
 
           <div>

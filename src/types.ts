@@ -62,7 +62,8 @@ export type TimelineEventType =
   | 'PARTIAL_PAYMENT'
   | 'TRANSACTION_COMPLETED'
   | 'CANCELLED'
-  | 'NOTE_ADDED';
+  | 'NOTE_ADDED'
+  | 'OFFER_APPLIED';
 
 export interface TimelineEvent {
   id: string;
@@ -74,6 +75,17 @@ export interface TimelineEvent {
   remainingBalance: number;
   notes?: string;
   actor?: 'USER' | 'ADMIN';
+}
+
+export interface PriceAdjustment {
+  id: string;
+  previousAmount: number;
+  newAmount: number;
+  savings: number;
+  reason?: string;
+  message?: string;
+  appliedAt: string;
+  appliedBy: string;
 }
 
 export interface OrderRequest {
@@ -97,6 +109,16 @@ export interface OrderRequest {
   timeline: TimelineEvent[];
   createdAt: string;
   updatedAt: string;
+  // Special Supplier Offer & Price Adjustment Fields
+  originalRequestedAmount?: number;
+  currentOrderAmount?: number;
+  offerApplied?: boolean;
+  offerAmount?: number;
+  discountAmount?: number;
+  offerMessage?: string;
+  offerUpdatedAt?: string;
+  offerUpdatedBy?: string;
+  priceAdjustments?: PriceAdjustment[];
   // Extra fields for rejection, payment, and grouping
   rejectedAt?: string;
   rejectedBy?: string;
@@ -125,11 +147,13 @@ export interface GroupPayment {
   amountReceived: number;
   amountSettled: number;
   extraCash: number;
+  extraCashPaid?: number;
   paymentDate: string;
   createdAt: string;
   createdBy: 'ADMIN' | string;
   status: 'PAID' | 'PARTIALLY_PAID';
   notes?: string;
+  adminSignature?: string;
 }
 
 export type BalanceTransactionType =
@@ -152,6 +176,7 @@ export interface BalanceTransaction {
   date: string;
   time: string;
   timestamp: string;
+  reason?: string;
   relatedRequestId?: string;
   relatedRequestTitle?: string;
   relatedGroupPaymentId?: string;
@@ -198,15 +223,40 @@ export interface AppUser {
   creditBalance?: number;
 }
 
+export type NotificationType =
+  | 'status_change'
+  | 'payment_recorded'
+  | 'request_submitted'
+  | 'new_request'
+  | 'balance_request'
+  | 'balance_added'
+  | 'new_user'
+  | 'request_cancelled'
+  | 'special_offer'
+  | 'info';
+
 export interface AppNotification {
   id: string;
-  targetUserMobile: string; // 'ALL' or specific mobile
+  targetUserMobile: string; // 'ADMIN' or specific user mobile
   title: string;
   message: string;
-  type: 'status_change' | 'payment_recorded' | 'request_submitted' | 'info';
+  type: NotificationType;
   timestamp: string;
   read: boolean;
+  readAt?: string;
   requestId?: string;
+  userId?: string;
+  userMobile?: string;
+  userName?: string;
+  amount?: number;
+  reason?: string;
+  newBalance?: number;
+  relatedRequestId?: string;
+  relatedBalanceRequestId?: string;
+  relatedTransactionId?: string;
+  originalPrice?: number;
+  offerPrice?: number;
+  savings?: number;
 }
 
 export type CurrencyCode = 'INR' | 'USD' | 'EUR' | 'GBP' | 'AED' | 'CAD';

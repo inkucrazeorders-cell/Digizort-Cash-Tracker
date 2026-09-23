@@ -77,11 +77,9 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
   const currentPaid = request.amountPaid || (request.status === 'Paid' ? actualPrice : 0);
   const remaining = request.remainingAmount ?? (request.status === 'Paid' ? 0 : Math.max(0, actualPrice - currentPaid));
 
-  const paymentNum = Number(paymentAmount) || 0;
-  const isOverpayment = paymentSource === 'cash' ? paymentNum > remaining : false;
-  const extraCash = isOverpayment ? paymentNum - remaining : 0;
-  const settledAmount = Math.min(paymentNum, remaining);
-  const balanceAfter = Math.max(0, remaining - paymentNum);
+  const paymentToRecord = paymentSource === 'balance' ? Math.min(userAvailableCredit, remaining) : remaining;
+  const settledAmount = paymentToRecord;
+  const balanceAfter = Math.max(0, remaining - paymentToRecord);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,21 +96,21 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
       } else if (actionType === 'status') {
         await adminUpdateStatus(request.id, selectedStatus, adminNote.trim() || undefined);
       } else if (actionType === 'payment') {
-        if (paymentNum <= 0) return;
+        if (paymentToRecord <= 0) return;
         if (paymentSource === 'balance') {
-          if (paymentNum > userAvailableCredit) {
+          if (paymentToRecord > userAvailableCredit) {
             throw new Error(`Cannot use more balance than available (₹${userAvailableCredit}).`);
           }
           await adminUseBalance({
             userId: request.userId,
             userMobile: request.userMobile,
             userName: request.userName,
-            amount: paymentNum,
+            amount: paymentToRecord,
             relatedRequestId: request.id,
             notes: adminNote.trim() || undefined,
           });
         } else {
-          await adminRecordPayment(request.id, paymentNum, adminNote.trim() || undefined);
+          await adminRecordPayment(request.id, paymentToRecord, adminNote.trim() || undefined);
         }
       }
 
@@ -292,193 +290,77 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
             )}
 
             {/* ACTION 4: RECORD PAYMENT */}
+            {/* ACTION 5: RECORD PAYMENT (Calculated Actual Payment Workflow) */}
             {actionType === 'payment' && (
               <>
-                <div className="p-3.5 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
-                        <DollarSign className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <span className="text-xs font-extrabold text-white block">Customer Balance Due</span>
-                        <span className="text-[10px] text-emerald-400 block">Paid user balance in cash? 1-click settle</span>
-                      </div>
-                    </div>
-                    <span className="font-extrabold text-emerald-400 text-base">
+                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-zinc-800/80">
+                    <span className="text-xs text-zinc-400 font-medium">Expected Payment Due:</span>
+                    <span className="font-extrabold text-white text-sm">
                       {settings.currencySymbol}{remaining.toLocaleString('en-IN')}
                     </span>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPaymentSource('cash');
-                      setPaymentAmount(String(remaining));
-                      setAdminNote('Paid user balance in cash');
-                    }}
-                    className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all active:scale-[0.98]"
-                    id="btn-quick-mark-paid-cash-modal"
-                  >
-                    <DollarSign className="w-3.5 h-3.5" />
-                    <span>Mark Full Balance as Paid Cash ({settings.currencySymbol}{remaining.toLocaleString('en-IN')})</span>
-                  </button>
-                </div>
-
-                {userAvailableCredit > 0 && (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-1.5 p-1 bg-zinc-950 border border-zinc-800 rounded-xl">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPaymentSource('cash');
-                          setPaymentAmount(String(remaining));
-                        }}
-                        className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all ${
-                          paymentSource === 'cash'
-                            ? 'bg-zinc-800 text-white shadow-sm'
-                            : 'text-zinc-400 hover:text-white'
-                        }`}
-                      >
-                        Cash / Direct Payment
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPaymentSource('balance');
-                          setPaymentAmount(String(Math.min(userAvailableCredit, remaining)));
-                        }}
-                        className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-                          paymentSource === 'balance'
-                            ? 'bg-blue-600 text-white shadow-sm'
-                            : 'text-blue-400 hover:text-blue-300'
-                        }`}
-                      >
-                        <Coins className="w-3.5 h-3.5" />
-                        <span>Use Balance ({settings.currencySymbol}{userAvailableCredit})</span>
-                      </button>
-                    </div>
-
-                    {paymentSource === 'balance' && (
-                      <div className="p-2.5 rounded-xl bg-blue-950/30 border border-blue-800/40 text-[11px] text-blue-300 flex items-center justify-between">
-                        <span>Customer Available Balance:</span>
-                        <span className="font-extrabold text-white text-xs">
-                          {settings.currencySymbol}{userAvailableCredit.toLocaleString('en-IN')}
-                        </span>
-                      </div>
-                    )}
+                  <div className="flex items-center justify-between pb-2 border-b border-zinc-800/80">
+                    <span className="text-xs text-zinc-400 font-medium">Calculated Payment to Record:</span>
+                    <span className="font-extrabold text-emerald-400 text-base">
+                      {settings.currencySymbol}
+                      {(paymentSource === 'balance'
+                        ? Math.min(userAvailableCredit, remaining)
+                        : remaining
+                      ).toLocaleString('en-IN')}
+                    </span>
                   </div>
-                )}
 
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-bold text-zinc-300">
-                      {paymentSource === 'balance' ? 'Amount to Use from Balance' : 'Amount Received'}{' '}
-                      ({settings.currencySymbol}) <span className="text-rose-400">*</span>
-                    </label>
-                    <div className="flex items-center gap-2">
-                      {paymentSource === 'balance' ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => setPaymentAmount(String(Math.min(userAvailableCredit, remaining)))}
-                            className="text-[10px] text-blue-400 font-bold hover:underline"
-                          >
-                            Pay Due ({settings.currencySymbol}{Math.min(userAvailableCredit, remaining)})
-                          </button>
-                          {userAvailableCredit < remaining && (
-                            <button
-                              type="button"
-                              onClick={() => setPaymentAmount(String(userAvailableCredit))}
-                              className="text-[10px] text-emerald-400 font-bold hover:underline"
-                            >
-                              All Balance ({settings.currencySymbol}{userAvailableCredit})
-                            </button>
-                          )}
-                        </>
-                      ) : (
+                  {userAvailableCredit > 0 && (
+                    <div className="pt-1 space-y-2">
+                      <div className="flex items-center gap-1.5 p-1 bg-zinc-900 border border-zinc-800 rounded-xl">
                         <button
                           type="button"
-                          onClick={() => setPaymentAmount(String(remaining))}
-                          className="text-[10px] text-emerald-400 font-bold hover:underline"
+                          onClick={() => setPaymentSource('cash')}
+                          className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                            paymentSource === 'cash'
+                              ? 'bg-zinc-800 text-white shadow-sm'
+                              : 'text-zinc-400 hover:text-white'
+                          }`}
                         >
-                          Fill Exact Due ({settings.currencySymbol}{remaining.toLocaleString('en-IN')})
+                          Direct / Cash Settle
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => setPaymentSource('balance')}
+                          className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                            paymentSource === 'balance'
+                              ? 'bg-blue-600 text-white shadow-sm'
+                              : 'text-blue-400 hover:text-blue-300'
+                          }`}
+                        >
+                          <Coins className="w-3.5 h-3.5" />
+                          <span>Use Balance ({settings.currencySymbol}{userAvailableCredit})</span>
+                        </button>
+                      </div>
+
+                      {paymentSource === 'balance' && (
+                        <div className="p-2.5 rounded-xl bg-blue-950/30 border border-blue-800/40 text-[11px] text-blue-300 flex items-center justify-between">
+                          <span>Customer Available Balance:</span>
+                          <span className="font-extrabold text-white text-xs">
+                            {settings.currencySymbol}{userAvailableCredit.toLocaleString('en-IN')}
+                          </span>
+                        </div>
                       )}
                     </div>
-                  </div>
-                  <input
-                    type="number"
-                    step="any"
-                    min="1"
-                    max={paymentSource === 'balance' ? userAvailableCredit : undefined}
-                    required
-                    placeholder={paymentSource === 'balance' ? `Max ${userAvailableCredit}` : 'Enter cash received'}
-                    value={paymentAmount}
-                    onChange={(e) => setPaymentAmount(e.target.value)}
-                    className={`w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 font-extrabold text-base focus:outline-none ${
-                      paymentSource === 'balance'
-                        ? 'text-blue-400 focus:border-blue-500'
-                        : 'text-emerald-400 focus:border-emerald-500'
-                    }`}
-                    id="input-admin-payment-amount"
-                  />
-                  <p className="text-[10px] text-zinc-500 mt-1">
-                    {paymentSource === 'balance'
-                      ? 'Deducts from user credit. Remaining balance stays in account.'
-                      : 'Overpayments are supported. Excess payment is safely credited as customer balance.'}
-                  </p>
-                </div>
+                  )}
 
-                {/* Realtime Extra Cash / Settlement Breakdown */}
-                {paymentNum > 0 && (
-                  <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 text-xs space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-zinc-400">Request Amount Due:</span>
-                      <span className="font-bold text-white">
-                        {settings.currencySymbol}{remaining.toLocaleString('en-IN')}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-zinc-400">
-                        {paymentSource === 'balance' ? 'Deducted from Balance:' : 'Cash Received:'}
-                      </span>
-                      <span className={`font-bold ${paymentSource === 'balance' ? 'text-blue-400' : 'text-emerald-400'}`}>
-                        {settings.currencySymbol}{paymentNum.toLocaleString('en-IN')}
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-zinc-400">Amount Settled:</span>
-                      <span className="font-bold text-white">
-                        {settings.currencySymbol}{settledAmount.toLocaleString('en-IN')}
-                      </span>
-                    </div>
-                    {paymentSource === 'balance' && (
-                      <div className="flex justify-between pt-1.5 border-t border-zinc-800">
-                        <span className="text-zinc-400">Remaining Customer Balance:</span>
-                        <span className="font-extrabold text-emerald-400">
-                          {settings.currencySymbol}{Math.max(0, userAvailableCredit - paymentNum).toLocaleString('en-IN')}
-                          {userAvailableCredit - paymentNum === 0 && ' (Cleared)'}
-                        </span>
-                      </div>
-                    )}
-                    {extraCash > 0 && paymentSource === 'cash' && (
-                      <div className="flex justify-between pt-1.5 border-t border-zinc-800 font-extrabold text-amber-400">
-                        <span className="flex items-center gap-1">
-                          <Sparkles className="w-3.5 h-3.5" /> Extra Cash (To Credit):
-                        </span>
-                        <span>{settings.currencySymbol}{extraCash.toLocaleString('en-IN')}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between pt-1.5 border-t border-zinc-800">
-                      <span className="text-zinc-400">Request Remaining Due:</span>
-                      <span className={`font-extrabold ${balanceAfter === 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {settings.currencySymbol}{balanceAfter.toLocaleString('en-IN')}
-                        {balanceAfter === 0 ? ' (Fully Settled)' : ' (Remaining)'}
-                      </span>
-                    </div>
+                  <div className="p-2.5 rounded-xl bg-emerald-950/30 border border-emerald-500/30 text-[11px] text-emerald-300 space-y-1">
+                    <p className="font-bold flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      Automatic Calculated Payment
+                    </p>
+                    <p className="text-zinc-400 leading-relaxed text-[10px]">
+                      The payment amount is automatically locked to the calculated expected due ({settings.currencySymbol}{remaining.toLocaleString('en-IN')}). To record arbitrary cash received with extra cash or partial payments, use the dedicated <strong className="text-white">Paid</strong> button.
+                    </p>
                   </div>
-                )}
+                </div>
 
                 <div>
                   <label className="block text-xs font-bold text-zinc-300 mb-1">
@@ -486,10 +368,10 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. Received via UPI / Cash / Bank Transfer"
+                    placeholder="e.g. Counter Payment / Official Statement Settled"
                     value={adminNote}
                     onChange={(e) => setAdminNote(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-[#E53935]"
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500"
                   />
                 </div>
               </>
@@ -521,7 +403,7 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
 
               <button
                 type="submit"
-                disabled={isSubmitting || (actionType === 'payment' && paymentNum <= 0)}
+                disabled={isSubmitting || (actionType === 'payment' && paymentToRecord <= 0)}
                 className={`flex-1 py-3 px-4 text-white text-xs font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all ${
                   actionType === 'delete' || actionType === 'reject'
                     ? 'bg-rose-600 hover:brightness-110 shadow-rose-600/20'
@@ -545,13 +427,7 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
                       {actionType === 'reject' && 'Confirm Rejection'}
                       {actionType === 'accept' && 'Accept & Confirm'}
                       {actionType === 'status' && 'Update Status'}
-                      {actionType === 'payment' && (
-                        paymentSource === 'cash'
-                          ? `Confirm Paid Cash (${settings.currencySymbol}${Number(paymentAmount || remaining).toLocaleString('en-IN')})`
-                          : isOverpayment
-                          ? 'Confirm Payment & Extra Cash'
-                          : 'Record Payment'
-                      )}
+                      {actionType === 'payment' && `Confirm Record Payment (${settings.currencySymbol}${paymentToRecord.toLocaleString('en-IN')})`}
                     </span>
                   </>
                 )}
