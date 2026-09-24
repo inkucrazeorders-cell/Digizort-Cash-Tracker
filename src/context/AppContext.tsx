@@ -21,6 +21,8 @@ import {
   getDoc,
   collection,
   onSnapshot,
+  query,
+  where,
   deleteDoc,
   updateDoc,
   writeBatch,
@@ -228,23 +230,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 3500);
   };
 
-  // Restore session from localStorage on app load (Admin Panel ONLY)
+  // Restore session from localStorage on app load (Both Normal Users and Admin)
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_SESSION_KEY);
-      if (saved) {
+    let isMounted = true;
+
+    const restoreSession = async () => {
+      try {
+        const saved = localStorage.getItem(STORAGE_SESSION_KEY);
+        if (!saved) return;
+
         const session = JSON.parse(saved);
         if (session.isAdmin) {
-          setIsAdmin(true);
-          setAppMode('admin_panel');
-        } else {
-          // Disable automatic login / session persistence for User Portal
-          localStorage.removeItem(STORAGE_SESSION_KEY);
+          if (isMounted) {
+            setIsAdmin(true);
+            setCurrentUser(null);
+            setAppMode('admin_panel');
+          }
+          return;
         }
+
+        const mobile = session.userMobile || session.userId;
+        if (mobile && typeof mobile === 'string') {
+          // Verify with Firestore database that this account is active and exists
+          const userDoc = await getDoc(doc(db, 'app_users', mobile.trim()));
+          if (!isMounted) return;
+
+          if (userDoc.exists()) {
+            const userData = { id: userDoc.id, ...userDoc.data() } as AppUser;
+            if (userData.status === 'suspended') {
+              console.warn('[Session] Persisted account is suspended by admin.');
+              localStorage.removeItem(STORAGE_SESSION_KEY);
+              setCurrentUser(null);
+              setIsAdmin(false);
+              setAppMode('auth');
+              return;
+            }
+
+            // Restore valid authenticated user session
+            setCurrentUser(userData);
+            setIsAdmin(false);
+            setAppMode('user_portal');
+            console.log(`[Session] Restored persistent user session for ${userData.fullName} (${userData.mobileNumber})`);
+          } else {
+            console.warn('[Session] User account no longer exists in database.');
+            localStorage.removeItem(STORAGE_SESSION_KEY);
+            setCurrentUser(null);
+            setIsAdmin(false);
+            setAppMode('auth');
+          }
+        }
+      } catch (e) {
+        console.error('[Session] Session restore error:', e);
+        localStorage.removeItem(STORAGE_SESSION_KEY);
       }
-    } catch (e) {
-      console.error('Session restore error:', e);
-    }
+    };
+
+    restoreSession();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Real-time listener for ALL REQUESTS from Firestore
@@ -287,13 +332,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => unsubscribe();
   }, []);
 
-  // Real-time listener for NOTIFICATIONS from Firestore with Web Push dispatch
+  // Real-time listener for NOTIFICATIONS with strict database query isolation
   const isInitialNotifLoadRef = useRef(true);
 
   useEffect(() => {
-    const notifRef = collection(db, 'notifications');
+    // If not logged in and not admin, do not query any notifications
+    if (!currentUser && !isAdmin) {
+      setNotifications([]);
+      isInitialNotifLoadRef.current = true;
+      return;
+    }
+
+    let notifQuery;
+    if (isAdmin) {
+      // Admin Panel: Has access to all notifications / admin notification management
+      notifQuery = collection(db, 'notifications');
+    } else {
+      // User Portal: Strictly isolated at the database query level
+      // Query ONLY notifications belonging to the currently authenticated user's ID/mobile
+      const userMobile = currentUser.mobileNumber;
+      notifQuery = query(
+        collection(db, 'notifications'),
+        where('targetUserMobile', '==', userMobile)
+      );
+    }
+
     const unsubscribe = onSnapshot(
-      notifRef,
+      notifQuery,
       (snapshot) => {
         const fetched: AppNotification[] = [];
         snapshot.forEach((doc) => {
@@ -307,7 +372,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           snapshot.docChanges().forEach((change) => {
             if (change.type === 'added') {
               const notif = change.doc.data() as AppNotification;
-              // Admin notification push (Part 13)
+              // Admin notification push
               if (isAdmin && (notif.targetUserMobile === 'ADMIN' || notif.type === 'new_request')) {
                 pushManager.dispatchLocalNotification({
                   title: notif.title || 'New Order Request',
@@ -316,7 +381,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   requestId: notif.requestId,
                 });
               }
-              // Customer notification push
+              // Customer notification push (guaranteed to be for currentUser due to query filter)
               if (currentUser && notif.targetUserMobile === currentUser.mobileNumber) {
                 pushManager.dispatchLocalNotification({
                   title: notif.title || 'DIGIZORT Update',
@@ -336,7 +401,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     );
     return () => unsubscribe();
-  }, [isAdmin, currentUser]);
+  }, [isAdmin, currentUser?.mobileNumber]);
 
   // Real-time listener for GROUP PAYMENTS from Firestore
   useEffect(() => {
@@ -403,13 +468,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     ? allRequests.filter((r) => r.userMobile === currentUser.mobileNumber)
     : [];
 
-  // Filter notifications for current user - strict privacy, never leak between users
+  // Filter notifications for current user - strict database isolation
   const userNotifications = currentUser
-    ? notifications.filter((n) => n.targetUserMobile === currentUser.mobileNumber)
+    ? (isAdmin ? notifications.filter((n) => n.targetUserMobile === currentUser.mobileNumber) : notifications)
     : [];
 
   // Filter notifications for Admin
-  const adminNotifications = notifications.filter((n) => n.targetUserMobile === 'ADMIN');
+  const adminNotifications = isAdmin
+    ? notifications.filter((n) => n.targetUserMobile === 'ADMIN')
+    : [];
 
   const unreadAdminNotificationsCount = adminNotifications.filter((n) => !n.read).length;
   const unreadUserNotificationsCount = userNotifications.filter((n) => !n.read).length;
@@ -513,6 +580,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(newUser);
     setIsAdmin(false);
     setAppMode('user_portal');
+
+    // Persist authenticated customer session
+    try {
+      localStorage.setItem(
+        STORAGE_SESSION_KEY,
+        JSON.stringify({
+          isAdmin: false,
+          userId: newUser.id,
+          userMobile: newUser.mobileNumber,
+          loginTimestamp: Date.now(),
+        })
+      );
+    } catch (e) {
+      console.warn('[Session] Could not store persistent session:', e);
+    }
+
     return newUser;
   };
 
@@ -533,6 +616,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(updated);
     setIsAdmin(false);
     setAppMode('user_portal');
+
+    // Persist authenticated customer session
+    try {
+      localStorage.setItem(
+        STORAGE_SESSION_KEY,
+        JSON.stringify({
+          isAdmin: false,
+          userId: updated.id,
+          userMobile: updated.mobileNumber,
+          loginTimestamp: Date.now(),
+        })
+      );
+    } catch (e) {
+      console.warn('[Session] Could not store persistent session:', e);
+    }
+
     showToast(`Welcome back, ${user.fullName}!`);
   };
 
@@ -547,7 +646,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsAdmin(true);
       setCurrentUser(null);
       setAppMode('admin_panel');
-      localStorage.setItem(STORAGE_SESSION_KEY, JSON.stringify({ isAdmin: true }));
+      try {
+        localStorage.setItem(
+          STORAGE_SESSION_KEY,
+          JSON.stringify({ isAdmin: true, loginTimestamp: Date.now() })
+        );
+      } catch (e) {
+        console.warn('[Session] Could not store admin session:', e);
+      }
       showToast('Unlocked Admin Panel');
       return true;
     }
@@ -558,7 +664,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(null);
     setIsAdmin(false);
     setAppMode('auth');
-    localStorage.removeItem(STORAGE_SESSION_KEY);
+    try {
+      localStorage.removeItem(STORAGE_SESSION_KEY);
+    } catch (e) {
+      console.warn('[Session] Could not clear persistent session:', e);
+    }
     showToast('Logged out successfully.');
   };
 
