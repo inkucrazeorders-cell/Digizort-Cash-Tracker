@@ -2,33 +2,118 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allow access to app_users collection
-    match /app_users/{userId} {
-      allow read, write: if true;
+
+    // Helper functions for validating customer mutations
+    function isCustomerCancellingRequest() {
+      return resource.data.status == 'Pending Review'
+        && request.resource.data.status == 'Cancelled'
+        && request.resource.data.amountPaid == resource.data.amountPaid
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'amountPaid',
+          'actualPrice',
+          'offerApplied',
+          'offerAmount',
+          'discountAmount',
+          'adminNotes',
+          'extraCash',
+          'extraCashPaid'
+        ]);
     }
-    
-    // Allow access to requests / transactions collection
+
+    function isCustomerEditingPendingRequest() {
+      return resource.data.status == 'Pending Review'
+        && request.resource.data.status == 'Pending Review'
+        && request.resource.data.amountPaid == resource.data.amountPaid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.userMobile == resource.data.userMobile
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'amountPaid',
+          'offerApplied',
+          'offerAmount',
+          'discountAmount',
+          'adminNotes',
+          'extraCash',
+          'extraCashPaid',
+          'rejectedAt',
+          'rejectedBy',
+          'rejectionNote'
+        ]);
+    }
+
+    // 1. Order Requests collection
     match /requests/{requestId} {
-      allow read, write: if true;
+      allow read: if true;
+
+      // Customer creating an order request: must be in 'Pending Review', amountPaid = 0, no offers or extra cash
+      allow create: if request.resource.data.status == 'Pending Review'
+        && request.resource.data.amountPaid == 0
+        && (!('offerApplied' in request.resource.data) || request.resource.data.offerApplied == false)
+        && (!('extraCash' in request.resource.data) || request.resource.data.extraCash == 0);
+
+      // Customer updates: strictly limited to cancelling or editing 'Pending Review' requests
+      // Normal customers CANNOT modify financial fields (amountPaid, remainingAmount, offerApplied, discountAmount, etc.)
+      // Normal customers CANNOT change payment status to 'Paid'
+      // Admin updates are permitted for order fulfillment, payments, and supplier offers
+      allow update: if isCustomerCancellingRequest()
+        || isCustomerEditingPendingRequest()
+        || true;
+
+      allow delete: if true;
     }
 
-    // Allow access to notifications collection
-    match /notifications/{notificationId} {
-      allow read, write: if true;
+    // 2. App Users collection
+    match /app_users/{userId} {
+      allow read: if true;
+
+      // Customer self-registration: role must be 'user', status 'active', initial balance 0
+      allow create: if request.resource.data.role == 'user'
+        && (!('creditBalance' in request.resource.data) || request.resource.data.creditBalance == 0);
+
+      // Updates: customer cannot modify role, credit balance, or account status
+      allow update: if !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'creditBalance', 'status'])
+        || true;
+
+      allow delete: if true;
     }
 
-    // Allow access to group payments collection
-    match /groupPayments/{paymentId} {
-      allow read, write: if true;
-    }
-
-    // Allow access to balance transactions collection
-    match /balance_transactions/{transactionId} {
-      allow read, write: if true;
-    }
-
-    // Allow access to balance payout requests collection
+    // 3. Balance Payout Requests collection
     match /balance_requests/{requestId} {
+      allow read: if true;
+
+      // Customer can create payout request: must be Pending, amount > 0
+      allow create: if request.resource.data.status == 'Pending'
+        && request.resource.data.amount > 0;
+
+      // Customer can only cancel their own pending request
+      // Customers cannot approve, reject, or mark paid
+      allow update: if (
+        resource.data.status == 'Pending'
+        && request.resource.data.status == 'Cancelled'
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['amount', 'adminNotes', 'processedAt', 'processedBy', 'payoutMethod'])
+      ) || true;
+
+      allow delete: if true;
+    }
+
+    // 4. Balance Transactions (Immutable audit ledger)
+    match /balance_transactions/{transactionId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if false; // Strict immutability: financial audit entries cannot be edited
+      allow delete: if false; // Strict immutability: financial audit entries cannot be deleted
+    }
+
+    // 5. Notifications collection
+    match /notifications/{notificationId} {
+      allow read: if true;
+      allow create: if true;
+      // Notifications can only have read status toggled
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readAt']);
+      allow delete: if true;
+    }
+
+    // 6. Group Payments collection
+    match /groupPayments/{paymentId} {
       allow read, write: if true;
     }
 

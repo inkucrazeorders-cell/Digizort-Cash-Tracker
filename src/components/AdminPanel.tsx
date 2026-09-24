@@ -24,6 +24,7 @@ import { AdminBalanceRequestsView } from './AdminBalanceRequestsView';
 import { PaidAmountModal } from './PaidAmountModal';
 import { PayUserBalanceModal } from './PayUserBalanceModal';
 import { AdminOfferModal } from './AdminOfferModal';
+import { pushManager, NotificationPermissionState } from '../lib/pushNotifications';
 import {
   ShieldCheck,
   ShoppingBag,
@@ -85,6 +86,8 @@ export const AdminPanel: React.FC = () => {
   const [adminTab, setAdminTab] = useState<
     'dashboard' | 'requests' | 'group_payment' | 'balance_requests' | 'rejected' | 'users' | 'reports'
   >('dashboard');
+
+  const [pushPermission, setPushPermission] = useState<NotificationPermissionState>(pushManager.getPermission());
 
   const pendingBalanceRequestsCount = balanceRequests.filter((r) => r.status === 'Pending').length;
 
@@ -367,6 +370,42 @@ export const AdminPanel: React.FC = () => {
                       className="text-[10px] text-zinc-400 hover:text-rose-400 font-bold transition-colors underline"
                     >
                       Mark all read
+                    </button>
+                  )}
+                </div>
+
+                {/* Admin Push Alert Preference */}
+                <div className="p-2.5 rounded-2xl bg-zinc-950 border border-zinc-800 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <Bell className={`w-3.5 h-3.5 ${pushPermission === 'granted' ? 'text-emerald-400' : 'text-zinc-400'}`} />
+                    <span className="text-zinc-300 font-bold text-[11px]">
+                      {pushPermission === 'granted' ? 'Browser Push Active' : 'Admin Web Push'}
+                    </span>
+                  </div>
+                  {pushPermission !== 'granted' ? (
+                    <button
+                      onClick={async () => {
+                        const granted = await pushManager.requestPermission();
+                        setPushPermission(pushManager.getPermission());
+                        if (granted) showToast('Admin push notifications enabled!');
+                      }}
+                      className="py-1 px-2.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[10px]"
+                    >
+                      Enable Push
+                    </button>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        await pushManager.dispatchLocalNotification({
+                          title: '🚨 Admin Alert Active',
+                          body: 'Real-time admin push notification verified!',
+                          tag: 'admin-test',
+                        });
+                        showToast('Admin test push alert sent!');
+                      }}
+                      className="py-1 px-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px]"
+                    >
+                      Test
                     </button>
                   )}
                 </div>
@@ -2168,6 +2207,7 @@ export const AdminPanel: React.FC = () => {
             <DigitalDocumentCard
               transaction={inspectDocReq}
               showWhatsAppShare={true}
+              isAdminView={true}
               onClose={() => setInspectDocReq(null)}
               onOpenRecordPayment={() => {
                 setSelectedReq(inspectDocReq);

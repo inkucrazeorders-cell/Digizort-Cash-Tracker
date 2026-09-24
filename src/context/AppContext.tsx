@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import {
   AppUser,
   OrderRequest,
@@ -34,6 +34,12 @@ import {
   getUserAvailableBalance,
 } from '../lib/calculations';
 import confetti from 'canvas-confetti';
+import { pushManager } from '../lib/pushNotifications';
+import {
+  normalizeWhatsAppNumber,
+  formatSubmissionWhatsAppMessage,
+  sendWhatsAppViaServer,
+} from '../lib/whatsapp';
 
 interface AppContextType {
   currentUser: AppUser | null;
@@ -281,7 +287,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => unsubscribe();
   }, []);
 
-  // Real-time listener for NOTIFICATIONS from Firestore
+  // Real-time listener for NOTIFICATIONS from Firestore with Web Push dispatch
+  const isInitialNotifLoadRef = useRef(true);
+
   useEffect(() => {
     const notifRef = collection(db, 'notifications');
     const unsubscribe = onSnapshot(
@@ -293,13 +301,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         fetched.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         setNotifications(fetched);
+
+        // Real Web Push Dispatch for incoming events
+        if (!isInitialNotifLoadRef.current) {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'added') {
+              const notif = change.doc.data() as AppNotification;
+              // Admin notification push (Part 13)
+              if (isAdmin && (notif.targetUserMobile === 'ADMIN' || notif.type === 'new_request')) {
+                pushManager.dispatchLocalNotification({
+                  title: notif.title || 'New Order Request',
+                  body: notif.message,
+                  tag: notif.id,
+                  requestId: notif.requestId,
+                });
+              }
+              // Customer notification push
+              if (currentUser && notif.targetUserMobile === currentUser.mobileNumber) {
+                pushManager.dispatchLocalNotification({
+                  title: notif.title || 'DIGIZORT Update',
+                  body: notif.message,
+                  tag: notif.id,
+                  requestId: notif.requestId,
+                });
+              }
+            }
+          });
+        } else {
+          isInitialNotifLoadRef.current = false;
+        }
       },
       (error) => {
         console.error('Firestore notifications listener error:', error);
       }
     );
     return () => unsubscribe();
-  }, []);
+  }, [isAdmin, currentUser]);
 
   // Real-time listener for GROUP PAYMENTS from Firestore
   useEffect(() => {
@@ -528,7 +565,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateUserProfile = async (updatedData: Partial<AppUser>) => {
     if (!currentUser) return;
     const cleanNum = currentUser.mobileNumber;
-    const sanitized = sanitizeForFirestore(updatedData);
+    // Security: customer cannot elevate role, tamper with balance, or change status/mobile
+    const { role, creditBalance, status, mobileNumber, id, ...allowedUpdates } = updatedData as any;
+    const sanitized = sanitizeForFirestore(allowedUpdates);
     await updateDoc(doc(db, 'app_users', cleanNum), sanitized);
     setCurrentUser((prev) => (prev ? { ...prev, ...sanitized } : null));
   };
@@ -576,6 +615,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'Pending Review',
       description: data.description ? data.description.trim() : '',
       timeline: [initialTimeline],
+      submissionWhatsAppStatus: 'pending',
+      submissionWhatsAppMessageId: '',
+      submissionWhatsAppSentAt: '',
+      submissionWhatsAppError: '',
       createdAt: nowIso,
       updatedAt: nowIso,
     };
@@ -621,17 +664,85 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
+    // Commit the request write to Firestore FIRST
     await batch.commit();
 
     showToast('New Request Submitted Successfully!');
+
+    // WORKFLOW 2 — Automatic WhatsApp Confirmation to Customer's Registered Mobile
+    // Runs after Firestore write succeeds. Request creation NEVER depends on WhatsApp outcome.
+    (async () => {
+      try {
+        const customerMobile = currentUser.mobileNumber;
+        const normalizedPhone = normalizeWhatsAppNumber(customerMobile);
+
+        if (!normalizedPhone) {
+          console.warn('[WhatsApp Workflow 2] Customer phone number missing or invalid:', customerMobile);
+          await updateDoc(doc(db, 'requests', reqId), {
+            submissionWhatsAppStatus: 'failed',
+            submissionWhatsAppError: 'Customer mobile number is missing or invalid',
+          });
+          return;
+        }
+
+        const submissionMessage = formatSubmissionWhatsAppMessage({
+          customerName: currentUser.fullName,
+          requestId: reqId,
+          productName: data.productName.trim(),
+          amount: data.expectedPrice || 0,
+          currencySymbol: settings.currencySymbol || '₹',
+          submittedAt: nowIso,
+        });
+
+        const sendResult = await sendWhatsAppViaServer({
+          to: normalizedPhone,
+          message: submissionMessage,
+          requestId: reqId,
+          customerName: currentUser.fullName,
+        });
+
+        if (sendResult.success) {
+          console.log(`[WhatsApp Workflow 2] Auto-confirmation dispatched for #${reqId} to ${normalizedPhone}`);
+          await updateDoc(doc(db, 'requests', reqId), {
+            submissionWhatsAppStatus: 'sent',
+            submissionWhatsAppMessageId: sendResult.messageId || 'delivered',
+            submissionWhatsAppSentAt: new Date().toISOString(),
+            submissionWhatsAppError: '',
+          });
+        } else {
+          console.warn(`[WhatsApp Workflow 2] Dispatch rejected for #${reqId}:`, sendResult.error, sendResult.details);
+          const errDetail = sendResult.details ? `${sendResult.error}: ${sendResult.details}` : sendResult.error || 'Dispatch rejected';
+          await updateDoc(doc(db, 'requests', reqId), {
+            submissionWhatsAppStatus: 'failed',
+            submissionWhatsAppError: String(errDetail).slice(0, 300),
+          });
+        }
+      } catch (autoSendErr: any) {
+        console.error('[WhatsApp Workflow 2] Unexpected dispatch error:', autoSendErr);
+        try {
+          await updateDoc(doc(db, 'requests', reqId), {
+            submissionWhatsAppStatus: 'failed',
+            submissionWhatsAppError: (autoSendErr?.message || 'Network error during dispatch').slice(0, 300),
+          });
+        } catch {
+          // Prevent unhandled promise rejection
+        }
+      }
+    })();
   };
 
   const userCancelRequest = async (requestId: string) => {
+    if (!currentUser) throw new Error('Must be logged in to cancel a request.');
     const docRef = doc(db, 'requests', requestId);
     const snap = await getDoc(docRef);
     if (!snap.exists()) return;
 
     const req = snap.data() as OrderRequest;
+    if (req.userMobile !== currentUser.mobileNumber && req.userId !== currentUser.id) {
+      showToast('Unauthorized: You can only cancel your own requests.');
+      throw new Error('Unauthorized: You can only cancel your own requests.');
+    }
+
     if (req.status !== 'Pending Review') {
       showToast('Only requests in "Pending Review" status can be cancelled.');
       return;
@@ -689,11 +800,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       description?: string;
     }
   ) => {
+    if (!currentUser) throw new Error('Must be logged in to edit a request.');
     const docRef = doc(db, 'requests', requestId);
     const snap = await getDoc(docRef);
     if (!snap.exists()) return;
 
     const req = snap.data() as OrderRequest;
+    if (req.userMobile !== currentUser.mobileNumber && req.userId !== currentUser.id) {
+      showToast('Unauthorized: You can only edit your own requests.');
+      throw new Error('Unauthorized: You can only edit your own requests.');
+    }
+
     if (req.status !== 'Pending Review') {
       showToast('Only requests in "Pending Review" status can be edited.');
       return;
@@ -714,8 +831,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Request updated successfully.');
   };
 
-  // ADMIN ACTIONS
+  // STRICT ADMIN ACTIONS - ROLE-BASED ACCESS CONTROL
+  const enforceAdminAccess = () => {
+    if (!isAdmin) {
+      showToast('Unauthorized: Admin access required.');
+      throw new Error('Unauthorized: Admin access required.');
+    }
+  };
+
   const adminAcceptRequest = async (requestId: string, actualPrice: number, adminNotes?: string) => {
+    enforceAdminAccess();
     const docRef = doc(db, 'requests', requestId);
     const snap = await getDoc(docRef);
     if (!snap.exists()) return;
@@ -763,6 +888,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adminRejectRequest = async (requestId: string, reasonNotes: string) => {
+    enforceAdminAccess();
     const docRef = doc(db, 'requests', requestId);
     const snap = await getDoc(docRef);
     if (!snap.exists()) return;
@@ -809,12 +935,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adminDeleteRequest = async (requestId: string) => {
+    enforceAdminAccess();
     const docRef = doc(db, 'requests', requestId);
     await deleteDoc(docRef);
     showToast('Request permanently deleted.');
   };
 
   const adminUpdateStatus = async (requestId: string, newStatus: RequestStatus, notes?: string) => {
+    enforceAdminAccess();
     const docRef = doc(db, 'requests', requestId);
     const snap = await getDoc(docRef);
     if (!snap.exists()) return;
@@ -856,6 +984,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adminRecordPayment = async (requestId: string, paymentAmount: number, note?: string) => {
+    enforceAdminAccess();
     const docRef = doc(db, 'requests', requestId);
     const snap = await getDoc(docRef);
     if (!snap.exists()) return;
@@ -972,6 +1101,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     newPrice: number;
     message?: string;
   }) => {
+    enforceAdminAccess();
     const { requestId, newPrice, message } = params;
     const docRef = doc(db, 'requests', requestId);
     const snap = await getDoc(docRef);
@@ -1143,6 +1273,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     paymentDate?: string;
     notes?: string;
   }): Promise<string> => {
+    enforceAdminAccess();
     const { userId, userName, userMobile, requestIds, cashReceived, paymentDate, notes } = params;
     const nowIso = new Date().toISOString();
     const groupPaymentId = 'GP-' + Date.now().toString().slice(-6);
@@ -1273,6 +1404,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     amountReceived: number;
     notes?: string;
   }): Promise<void> => {
+    enforceAdminAccess();
     const { groupPaymentId, amountReceived, notes } = params;
     const numReceived = Number(amountReceived);
     if (isNaN(numReceived) || numReceived <= 0) {
@@ -1530,6 +1662,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     adminNotes?: string,
     payoutMethod?: string
   ): Promise<void> => {
+    enforceAdminAccess();
     const req = balanceRequests.find((r) => r.id === requestId);
     if (!req) throw new Error('Balance request not found.');
     if (req.status !== 'Pending') {
@@ -1682,6 +1815,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     requestId: string,
     reasonNotes: string
   ): Promise<void> => {
+    enforceAdminAccess();
     const req = balanceRequests.find((r) => r.id === requestId);
     if (!req) throw new Error('Balance request not found.');
     if (req.status !== 'Pending') {
@@ -1741,6 +1875,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     notes?: string;
     relatedRequestId?: string;
   }): Promise<void> => {
+    enforceAdminAccess();
     const { userId, userMobile, userName, amount, notes, relatedRequestId } = params;
     const numAmount = Number(amount);
     if (isNaN(numAmount) || numAmount <= 0) {
@@ -1876,6 +2011,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     relatedRequestId?: string;
     notes?: string;
   }): Promise<void> => {
+    enforceAdminAccess();
     const { userId, userMobile, userName, amount, relatedRequestId, notes } = params;
     const numAmount = Number(amount);
     if (isNaN(numAmount) || numAmount <= 0) {
@@ -2002,6 +2138,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     reason?: string;
     notes?: string;
   }): Promise<void> => {
+    enforceAdminAccess();
     const { userId, userMobile, userName, amount, type = 'Balance Added', reason = 'Manual Adjustment', notes } = params;
     const numAmount = Number(amount);
     if (isNaN(numAmount) || numAmount <= 0) {
@@ -2066,16 +2203,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const adminSuspendUser = async (userId: string) => {
+    enforceAdminAccess();
     await updateDoc(doc(db, 'app_users', userId), { status: 'suspended' });
     showToast('User suspended.');
   };
 
   const adminUnsuspendUser = async (userId: string) => {
+    enforceAdminAccess();
     await updateDoc(doc(db, 'app_users', userId), { status: 'active' });
     showToast('User unsuspended.');
   };
 
   const adminDeleteUser = async (userId: string) => {
+    enforceAdminAccess();
     await deleteDoc(doc(db, 'app_users', userId));
     showToast('User deleted.');
   };

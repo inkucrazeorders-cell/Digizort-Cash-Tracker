@@ -90,6 +90,29 @@
         "notes": { "type": "string" }
       }
     },
+    "requests": {
+      "path": "requests/{requestId}",
+      "fields": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userMobile": { "type": "string" },
+        "userName": { "type": "string" },
+        "requestType": { "type": "string" },
+        "productName": { "type": "string" },
+        "purpose": { "type": "string" },
+        "expectedPrice": { "type": "number" },
+        "actualPrice": { "type": "number" },
+        "amountPaid": { "type": "number" },
+        "remainingAmount": { "type": "number" },
+        "status": { "type": "string" },
+        "submissionWhatsAppStatus": { "type": "string" },
+        "submissionWhatsAppMessageId": { "type": "string" },
+        "submissionWhatsAppSentAt": { "type": "string" },
+        "submissionWhatsAppError": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    },
     "balanceRequests": {
       "path": "balance_requests/{requestId}",
       "fields": {

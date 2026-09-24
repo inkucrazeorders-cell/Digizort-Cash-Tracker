@@ -15,6 +15,8 @@ import {
 } from '../lib/calculations';
 import { NewRequestModal } from './NewRequestModal';
 import { DigitalDocumentCard } from './DigitalDocumentCard';
+import { CustomerOrderUpdatedModal } from './CustomerOrderUpdatedModal';
+import { pushManager, NotificationPermissionState } from '../lib/pushNotifications';
 import {
   PlusCircle,
   Clock,
@@ -82,6 +84,16 @@ export const UserPortal: React.FC = () => {
     (n) => n.targetUserMobile === currentUser?.mobileNumber && n.type === 'special_offer' && !n.read
   );
   const activeOfferPopup = unreadOfferNotifs.length > 0 ? unreadOfferNotifs[0] : null;
+
+  // Safe Customer View of Updated Order Modal (Part 4)
+  const [updatedOrderModalReq, setUpdatedOrderModalReq] = useState<OrderRequest | null>(null);
+  const [updatedOrderModalNotif, setUpdatedOrderModalNotif] = useState<any | null>(null);
+
+  // Browser Push Notification state
+  const [pushPermission, setPushPermission] = useState<NotificationPermissionState>(pushManager.getPermission());
+  const [isPushBannerDismissed, setIsPushBannerDismissed] = useState(() => {
+    return localStorage.getItem('digizort_push_banner_dismissed') === 'true';
+  });
 
   // Profile Edit State
   const [isEditingProfile, setIsEditingProfile] = useState(false);
@@ -248,6 +260,44 @@ export const UserPortal: React.FC = () => {
 
       {/* Main Container */}
       <main className="flex-1 max-w-6xl w-full mx-auto p-4 sm:p-6 space-y-6">
+        {/* Polite Browser Push Notification Banner (if not dismissed) */}
+        {!isPushBannerDismissed && pushPermission === 'default' && (
+          <div className="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/30 flex items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2.5">
+              <Bell className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="text-zinc-200">
+                Want instant real-time browser alerts when supplier discounts or updates are applied to your orders?
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={async () => {
+                  const granted = await pushManager.requestPermission();
+                  setPushPermission(pushManager.getPermission());
+                  if (granted) {
+                    showToast('Push notifications enabled!');
+                  }
+                }}
+                className="py-1.5 px-3 bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs rounded-xl transition-all shadow"
+              >
+                Enable
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  localStorage.setItem('digizort_push_banner_dismissed', 'true');
+                  setIsPushBannerDismissed(true);
+                }}
+                className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60"
+                title="Dismiss"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Welcome Banner & Metrics */}
         <div className="p-6 rounded-3xl bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800/90 shadow-2xl space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -735,7 +785,7 @@ export const UserPortal: React.FC = () => {
             ) : (
               <div className="space-y-6">
                 {userRequests.map((req) => (
-                  <DigitalDocumentCard key={req.id} transaction={req} showWhatsAppShare={false} />
+                  <DigitalDocumentCard key={req.id} transaction={req} showWhatsAppShare={false} isAdminView={false} />
                 ))}
               </div>
             )}
@@ -762,6 +812,67 @@ export const UserPortal: React.FC = () => {
                   className="py-1 px-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-xs font-bold transition-colors"
                 >
                   Mark all as read
+                </button>
+              )}
+            </div>
+
+            {/* Browser Push Notifications Preference Card */}
+            <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800/90 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                  pushPermission === 'granted'
+                    ? 'bg-emerald-500/20 text-emerald-400'
+                    : 'bg-zinc-800 text-zinc-400'
+                }`}>
+                  <Bell className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs font-bold text-white">Browser Push Notifications</h4>
+                    {pushPermission === 'granted' && (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
+                        Active
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-zinc-400">
+                    {pushPermission === 'granted'
+                      ? 'You will receive real-time push alerts on your desktop / mobile browser.'
+                      : pushPermission === 'denied'
+                      ? 'Notifications are blocked in your browser settings.'
+                      : 'Enable instant browser push alerts for supplier offers & price drops.'}
+                  </p>
+                </div>
+              </div>
+              {pushPermission !== 'granted' && pushPermission !== 'denied' && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const granted = await pushManager.requestPermission();
+                    setPushPermission(pushManager.getPermission());
+                    if (granted) {
+                      showToast('Push notifications enabled!');
+                    }
+                  }}
+                  className="py-1.5 px-3.5 bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs rounded-xl shadow transition-all shrink-0"
+                >
+                  Enable Push Alerts
+                </button>
+              )}
+              {pushPermission === 'granted' && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await pushManager.dispatchLocalNotification({
+                      title: '🔔 DIGIZORT Notifications Active',
+                      body: 'Real-time alert testing successful! You will receive live updates on supplier offers.',
+                      tag: 'test-push',
+                    });
+                    showToast('Test push notification sent!');
+                  }}
+                  className="py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-bold text-xs rounded-xl transition-colors shrink-0"
+                >
+                  Test Alert
                 </button>
               )}
             </div>
@@ -842,7 +953,23 @@ export const UserPortal: React.FC = () => {
                     <p className="text-zinc-300">{n.message}</p>
 
                     {n.requestId && (
-                      <div className="pt-1 flex items-center justify-end">
+                      <div className="pt-1 flex items-center justify-end gap-2">
+                        {n.type === 'special_offer' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const req = userRequests.find((r) => r.id === n.requestId);
+                              if (req) {
+                                setUpdatedOrderModalReq(req);
+                                setUpdatedOrderModalNotif(n);
+                              }
+                            }}
+                            className="text-[10px] font-extrabold text-amber-400 hover:underline flex items-center gap-1 bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/30"
+                          >
+                            <Sparkles className="w-3 h-3 text-amber-400" />
+                            <span>View Updated Order</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => {
@@ -852,9 +979,9 @@ export const UserPortal: React.FC = () => {
                             }
                             setActiveTab('requests');
                           }}
-                          className="text-[10px] font-bold text-amber-400 hover:underline flex items-center gap-1"
+                          className="text-[10px] font-bold text-zinc-400 hover:text-white hover:underline flex items-center gap-1"
                         >
-                          <span>View Order #{n.requestId}</span>
+                          <span>View Statement #{n.requestId}</span>
                           <ChevronRight className="w-3 h-3" />
                         </button>
                       </div>
@@ -1139,9 +1266,27 @@ export const UserPortal: React.FC = () => {
               <p className="text-xs text-zinc-400">{selectedReq.purpose} • #{selectedReq.id}</p>
             </div>
 
-            <DigitalDocumentCard transaction={selectedReq} showWhatsAppShare={false} />
+            <DigitalDocumentCard transaction={selectedReq} showWhatsAppShare={false} isAdminView={false} />
           </div>
         </div>
+      )}
+
+      {/* Customer Safe "View Updated Order" Modal (Part 4) */}
+      {updatedOrderModalReq && (
+        <CustomerOrderUpdatedModal
+          order={updatedOrderModalReq}
+          notification={updatedOrderModalNotif}
+          onClose={() => {
+            setUpdatedOrderModalReq(null);
+            setUpdatedOrderModalNotif(null);
+          }}
+          onViewDocument={() => {
+            const req = updatedOrderModalReq;
+            setUpdatedOrderModalReq(null);
+            setUpdatedOrderModalNotif(null);
+            setSelectedReq(req);
+          }}
+        />
       )}
 
       {/* New Request Modal */}
@@ -1328,9 +1473,9 @@ export const UserPortal: React.FC = () => {
                     const reqToOpen = userRequests.find((r) => r.id === activeOfferPopup.requestId);
                     markNotificationAsRead(activeOfferPopup.id);
                     if (reqToOpen) {
-                      setSelectedReq(reqToOpen);
+                      setUpdatedOrderModalReq(reqToOpen);
+                      setUpdatedOrderModalNotif(activeOfferPopup);
                     }
-                    setActiveTab('requests');
                   }}
                   className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 text-black font-extrabold text-xs shadow-lg shadow-amber-500/25 transition-all flex items-center justify-center gap-1.5"
                 >

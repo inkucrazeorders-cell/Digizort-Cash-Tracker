@@ -32,12 +32,14 @@ import {
   CreditCard,
   TrendingDown,
 } from 'lucide-react';
+import { normalizeWhatsAppNumber, sendWhatsAppViaServer } from '../lib/whatsapp';
 
 interface DigitalDocumentCardProps {
   transaction: OrderRequest;
   onClose?: () => void;
   onOpenRecordPayment?: () => void;
   showWhatsAppShare?: boolean;
+  isAdminView?: boolean;
 }
 
 export const DigitalDocumentCard: React.FC<DigitalDocumentCardProps> = ({
@@ -45,10 +47,14 @@ export const DigitalDocumentCard: React.FC<DigitalDocumentCardProps> = ({
   onClose,
   onOpenRecordPayment,
   showWhatsAppShare = false,
+  isAdminView,
 }) => {
-  const { settings, showToast, adminRecordPayment, adminPayBalance, getUserBalanceInfo, currentUser } = useApp();
+  const { settings, showToast, adminRecordPayment, adminPayBalance, getUserBalanceInfo, currentUser, isAdmin } = useApp();
   const cardRef = useRef<HTMLDivElement>(null);
   const [currentTransaction, setCurrentTransaction] = useState<OrderRequest>(transaction);
+
+  // Strict permission check: admin controls only available when user is actual admin AND in admin view
+  const allowAdminFinancialControls = Boolean(isAdmin && isAdminView !== false);
 
   useEffect(() => {
     setCurrentTransaction(transaction);
@@ -107,6 +113,10 @@ export const DigitalDocumentCard: React.FC<DigitalDocumentCardProps> = ({
 
   const handleMarkPaidInCash = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!allowAdminFinancialControls) {
+      showToast('Unauthorized: Admin access required.');
+      return;
+    }
     const num = Number(cashAmount) || remainingAmount;
     if (num <= 0) {
       showToast('Please enter a valid cash amount greater than 0.');
@@ -156,6 +166,10 @@ export const DigitalDocumentCard: React.FC<DigitalDocumentCardProps> = ({
 
   const handlePayCustomerCreditCash = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!allowAdminFinancialControls) {
+      showToast('Unauthorized: Admin access required.');
+      return;
+    }
     const num = Number(payoutAmount) || customerAvailableCredit;
     if (num <= 0) {
       showToast('Please enter a valid amount greater than 0.');
@@ -310,13 +324,14 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
     return cleaned;
   };
 
-  // Safe WhatsApp dispatch calling backend Cloud API with robust non-JSON response guarding
+  // Safe WhatsApp dispatch calling backend Cloud API via unified server layer
   const handleShareWhatsApp = async () => {
     if (isSendingWhatsApp) return;
 
-    const customerPhone = transaction.userMobile || transaction.phone || '';
-    if (!customerPhone) {
-      showToast('Customer WhatsApp mobile number not found.');
+    const rawCustomerPhone = transaction.userMobile || transaction.phone || '';
+    const normalizedPhone = normalizeWhatsAppNumber(rawCustomerPhone);
+    if (!normalizedPhone) {
+      showToast('Customer WhatsApp mobile number not found or invalid format.');
       return;
     }
 
@@ -328,58 +343,24 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
       setWhatsAppSendStatus('sending');
       setWhatsAppErrorMessage(null);
 
-      const response = await fetch('/api/whatsapp/send', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify({
-          to: customerPhone,
-          message: rawMessage,
-          requestId: transaction.id,
-          customerName: transaction.userName,
-        }),
+      const result = await sendWhatsAppViaServer({
+        to: normalizedPhone,
+        message: rawMessage,
+        requestId: transaction.id,
+        customerName: transaction.userName,
       });
 
-      const contentType = response.headers.get('content-type') || '';
-      let data: any = null;
-
-      if (contentType.includes('application/json')) {
-        try {
-          data = await response.json();
-        } catch {
-          data = null;
-        }
-      }
-
-      // If response was not JSON (e.g. Vercel 404 HTML or network error page), safely capture text
-      if (!data) {
-        const rawText = await response.text();
-        const cleanSnippet = rawText.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
-        data = {
-          success: false,
-          error: `Server returned HTTP ${response.status} (${response.statusText || 'Non-JSON'})`,
-          details: cleanSnippet || 'Backend endpoint /api/whatsapp/send returned an HTML/text response.',
-        };
-      }
-
-      if (response.ok && data.success) {
+      if (result.success) {
         setWhatsAppSendStatus('success');
         setIsUnregisteredError(false);
-        setSentMessageId(data.message_id || data.messageId || 'sent');
-        showToast(data.message || `WhatsApp message sent successfully to ${transaction.userName}!`);
+        setSentMessageId(result.messageId || 'sent');
+        showToast(`WhatsApp sent successfully to ${transaction.userName}!`);
       } else {
         setWhatsAppSendStatus('error');
-        const isUnreg =
-          data.isUnregistered ||
-          data.code === 133010 ||
-          (data.error && data.error.includes('133010')) ||
-          (data.details && data.details.includes('133010'));
-        setIsUnregisteredError(!!isUnreg);
+        setIsUnregisteredError(!!result.isUnregistered);
 
-        const errTitle = data.error || 'WhatsApp API error';
-        const errDetail = data.details ? `: ${data.details}` : '';
+        const errTitle = result.error || 'WhatsApp delivery failed';
+        const errDetail = result.details ? `: ${result.details}` : '';
         const fullErr = `${errTitle}${errDetail}`;
         setWhatsAppErrorMessage(fullErr);
         showToast(errTitle);
@@ -671,8 +652,8 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
           )}
         </div>
 
-        {/* ADMIN QUICK CASH ACTIONS (Direct inside statement) */}
-        {(remainingAmount > 0 || customerAvailableCredit > 0 || currentTransaction.extraCashPaid || userBalInfo.hasTransactions) && (
+        {/* ADMIN QUICK CASH ACTIONS (Direct inside statement - STRICTLY ADMIN ONLY) */}
+        {allowAdminFinancialControls && (remainingAmount > 0 || customerAvailableCredit > 0 || currentTransaction.extraCashPaid || userBalInfo.hasTransactions) && (
           <div className="p-3.5 rounded-2xl bg-zinc-900/95 border border-zinc-800 space-y-2.5">
             {remainingAmount > 0 && (
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-500/40">
@@ -831,7 +812,7 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
           <span>Download PDF</span>
         </button>
 
-        {remainingAmount > 0 && (
+        {allowAdminFinancialControls && remainingAmount > 0 && (
           <button
             type="button"
             onClick={() => {
@@ -879,8 +860,8 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
         )}
       </div>
 
-      {/* QUICK CASH SETTLEMENT MODAL */}
-      {showCashModal && (
+      {/* QUICK CASH SETTLEMENT MODAL (STRICTLY ADMIN ONLY) */}
+      {allowAdminFinancialControls && showCashModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-4 shadow-2xl relative">
             <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
@@ -995,8 +976,8 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
         </div>
       )}
 
-      {/* QUICK PAY CUSTOMER CREDIT BALANCE MODAL */}
-      {showPayoutCreditModal && (
+      {/* QUICK PAY CUSTOMER CREDIT BALANCE MODAL (STRICTLY ADMIN ONLY) */}
+      {allowAdminFinancialControls && showPayoutCreditModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 space-y-4 shadow-2xl relative">
             <div className="flex items-center justify-between border-b border-zinc-800 pb-3">

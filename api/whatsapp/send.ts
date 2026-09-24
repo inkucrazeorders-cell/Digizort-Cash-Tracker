@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { sendWhatsAppMessageCore } from './core';
 
 // Helper to safely parse body across all Vercel serverless runtimes
 async function getRequestBody(req: any): Promise<any> {
@@ -50,7 +51,6 @@ function sendJsonResponse(res: any, statusCode: number, data: any) {
 }
 
 export default async function handler(req: Request, res: Response) {
-  // Always return JSON responses
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -74,135 +74,25 @@ export default async function handler(req: Request, res: Response) {
 
   try {
     const body = await getRequestBody(req);
-    const { to, message, requestId, customerName } = body || {};
+    const { to, message, requestId, customerName, template } = body || {};
 
-    if (!to || !message) {
-      return sendJsonResponse(res, 400, {
-        success: false,
-        error: 'Missing required fields',
-        details: 'Both "to" (phone number) and "message" are required.',
-      });
-    }
-
-    // Format recipient phone number: remove non-digits, ensure country code (default 91 for India)
-    let cleanedPhone = String(to).replace(/\D/g, '');
-    if (cleanedPhone.startsWith('0') && cleanedPhone.length === 11) {
-      cleanedPhone = cleanedPhone.slice(1);
-    }
-    if (cleanedPhone.length === 10) {
-      cleanedPhone = `91${cleanedPhone}`;
-    }
-
-    if (cleanedPhone.length < 10) {
-      return sendJsonResponse(res, 400, {
-        success: false,
-        error: 'Invalid recipient phone number format',
-        details: `Phone number "${to}" is invalid. Please verify the customer mobile number.`,
-      });
-    }
-
-    const token = process.env.WHATSAPP_API_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN;
-    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '496013146934162';
-    const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '507742449083763';
-    const senderNumber = process.env.WHATSAPP_SENDER_NUMBER || '+91 8129043397';
-    // API version configured to v26.0 as required
-    const apiVersion = process.env.WHATSAPP_API_VERSION || 'v26.0';
-
-    // Safe server-side debug logging: check env variables presence without exposing token
-    console.log('[WhatsApp API Serverless] Environment check:', {
-      hasToken: !!token,
-      hasPhoneNumberId: !!phoneNumberId,
-      hasBusinessAccountId: !!businessAccountId,
-      configuredSenderNumber: senderNumber,
-      apiVersion,
+    const result = await sendWhatsAppMessageCore({
+      to,
+      message,
+      requestId,
+      customerName,
+      template,
     });
 
-    if (!token || !phoneNumberId) {
-      console.warn('[WhatsApp API Serverless] Missing credentials: WHATSAPP_API_TOKEN or WHATSAPP_PHONE_NUMBER_ID');
-      return sendJsonResponse(res, 400, {
-        success: false,
-        error: 'WhatsApp API error: Missing credentials',
-        details:
-          'WHATSAPP_API_TOKEN and WHATSAPP_PHONE_NUMBER_ID must be configured in Vercel Environment Variables. Verify settings in Vercel Dashboard → Project Settings → Environment Variables.',
-      });
+    if (result.success) {
+      return sendJsonResponse(res, 200, result);
+    } else {
+      // Determine HTTP status: 400 for config/validation, 502 for upstream Meta reject
+      const httpCode = result.code && Number(result.code) >= 400 && Number(result.code) < 500 ? 400 : 502;
+      return sendJsonResponse(res, httpCode, result);
     }
-
-    // Construct Meta WhatsApp Business Cloud API request URL
-    const metaUrl = `https://graph.facebook.com/${apiVersion}/${phoneNumberId}/messages`;
-    console.log('[WhatsApp API Serverless] Calling endpoint:', metaUrl, `to: ${cleanedPhone}`);
-
-    const payload = {
-      messaging_product: 'whatsapp',
-      recipient_type: 'individual',
-      to: cleanedPhone,
-      type: 'text',
-      text: {
-        preview_url: false,
-        body: message,
-      },
-    };
-
-    const metaResponse = await fetch(metaUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const statusCode = metaResponse.status;
-    let data: any = {};
-    const rawText = await metaResponse.text();
-
-    try {
-      data = JSON.parse(rawText);
-    } catch {
-      data = { raw: rawText };
-    }
-
-    // Log response status and body (NEVER logging the token)
-    console.log(`[WhatsApp API Serverless] Meta API HTTP ${statusCode} response:`, JSON.stringify(data));
-
-    if (!metaResponse.ok) {
-      let errorMsg =
-        data?.error?.message ||
-        data?.error?.error_data?.details ||
-        `WhatsApp Cloud API returned error (HTTP ${statusCode})`;
-      let details = data?.error?.error_user_msg || data?.error?.details || JSON.stringify(data?.error || data);
-
-      const isUnregistered =
-        data?.error?.code === 133010 ||
-        errorMsg.includes('133010') ||
-        errorMsg.includes('Account not registered');
-
-      if (isUnregistered) {
-        errorMsg = 'Sender number (+91 8129043397) is active on WhatsApp Business Mobile App.';
-        details = 'Meta Cloud API requires 2-step PIN registration, OR you can send directly via your WhatsApp app with 1 tap.';
-      }
-
-      const httpCode = statusCode >= 400 && statusCode < 500 ? statusCode : 502;
-      return sendJsonResponse(res, httpCode, {
-        success: false,
-        error: errorMsg,
-        code: data?.error?.code,
-        details: details,
-        isUnregistered,
-      });
-    }
-
-    const messageId = data?.messages?.[0]?.id || 'delivered';
-
-    return sendJsonResponse(res, 200, {
-      success: true,
-      message: 'WhatsApp message sent successfully',
-      message_id: messageId,
-      recipient: cleanedPhone,
-      customer_name: customerName || 'Customer',
-      request_id: requestId || 'N/A',
-    });
   } catch (err: any) {
-    console.error('[WhatsApp API Serverless] Fatal error:', err);
+    console.error('[WhatsApp API Handler] Fatal error:', err);
     return sendJsonResponse(res, 500, {
       success: false,
       error: 'WhatsApp API error',

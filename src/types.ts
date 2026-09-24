@@ -127,6 +127,11 @@ export interface OrderRequest {
   extraCashPaid?: number;
   cashReceived?: number;
   groupPaymentId?: string;
+  // Automatic Customer Submission WhatsApp tracking (Workflow 2)
+  submissionWhatsAppStatus?: 'pending' | 'sent' | 'failed';
+  submissionWhatsAppMessageId?: string;
+  submissionWhatsAppSentAt?: string;
+  submissionWhatsAppError?: string;
   // Compatibility fields for transaction legacy support
   amount?: number;
   category?: string;
