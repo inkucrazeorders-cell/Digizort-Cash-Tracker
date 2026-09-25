@@ -31,6 +31,7 @@ import {
   getRequestPrice,
   getOriginalPrice,
   getOfferSavings,
+  getRequestPaid,
   getRequestRemaining,
   isRequestRejected,
   getUserAvailableBalance,
@@ -70,7 +71,9 @@ interface AppContextType {
     productLink?: string;
     expectedPrice: number;
     description?: string;
+    balanceToUse?: number;
   }) => Promise<void>;
+  userPayRequestWithBalance: (requestId: string, amountToUse: number) => Promise<void>;
   userCancelRequest: (requestId: string) => Promise<void>;
   userEditRequest: (
     requestId: string,
@@ -690,22 +693,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     productLink?: string;
     expectedPrice: number;
     description?: string;
+    balanceToUse?: number;
   }) => {
     if (!currentUser) throw new Error('Must be logged in to submit a request.');
 
     const reqId = 'REQ-' + Math.floor(100000 + Math.random() * 900000);
     const nowIso = new Date().toISOString();
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-    const initialTimeline: TimelineEvent = {
-      id: 'EVT-1',
-      type: 'REQUEST_SUBMITTED',
-      title: 'Request Submitted for Review',
-      timestamp: nowIso,
-      totalPaidSoFar: 0,
-      remainingBalance: data.expectedPrice || 0,
-      notes: data.description ? data.description.trim() : 'Request submitted by customer.',
-      actor: 'USER',
-    };
+    const expectedPrice = Math.max(0, Number(data.expectedPrice) || 0);
+    const requestedBalanceToUse = Math.max(0, Number(data.balanceToUse) || 0);
+
+    let balanceActuallyUsed = 0;
+    let prevBal = 0;
+    let newBal = 0;
+
+    if (requestedBalanceToUse > 0) {
+      const balInfo = getUserBalanceInfo(currentUser.mobileNumber, currentUser.id);
+      prevBal = balInfo.availableBalance;
+      if (requestedBalanceToUse > prevBal) {
+        throw new Error(
+          `Cannot use ₹${requestedBalanceToUse}. Your available DIGIZORT balance is ₹${prevBal}.`
+        );
+      }
+      balanceActuallyUsed = Math.min(requestedBalanceToUse, expectedPrice);
+      newBal = Math.max(0, prevBal - balanceActuallyUsed);
+    }
+
+    const amountPaid = balanceActuallyUsed;
+    const remainingAmount = Math.max(0, expectedPrice - balanceActuallyUsed);
+    const initialStatus: RequestStatus =
+      remainingAmount === 0 ? 'Paid' : balanceActuallyUsed > 0 ? 'Partially Paid' : 'Pending Review';
+    const paymentMethodUsed =
+      balanceActuallyUsed === 0
+        ? 'External Payment'
+        : remainingAmount === 0
+        ? 'DIGIZORT Balance'
+        : 'Split Payment';
+
+    const initialTimeline: TimelineEvent[] = [
+      {
+        id: 'EVT-1',
+        type: 'REQUEST_SUBMITTED',
+        title: 'Request Submitted for Review',
+        timestamp: nowIso,
+        totalPaidSoFar: 0,
+        remainingBalance: expectedPrice,
+        notes: data.description ? data.description.trim() : 'Request submitted by customer.',
+        actor: 'USER',
+      },
+    ];
+
+    if (balanceActuallyUsed > 0) {
+      initialTimeline.push({
+        id: 'EVT-BAL-1',
+        type: remainingAmount === 0 ? 'TRANSACTION_COMPLETED' : 'PARTIAL_PAYMENT',
+        title:
+          remainingAmount === 0
+            ? 'Paid in Full using DIGIZORT Balance'
+            : `Partial Payment with DIGIZORT Balance (₹${balanceActuallyUsed})`,
+        timestamp: nowIso,
+        amountPaidThisStep: balanceActuallyUsed,
+        totalPaidSoFar: balanceActuallyUsed,
+        remainingBalance: remainingAmount,
+        notes: `Paid ₹${balanceActuallyUsed} from DIGIZORT Balance. Remaining due: ₹${remainingAmount}.`,
+        actor: 'USER',
+      });
+    }
 
     const rawRequest: OrderRequest = {
       id: reqId,
@@ -718,13 +774,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       productName: data.productName.trim(),
       purpose: data.purpose.trim(),
       productLink: data.productLink ? data.productLink.trim() : '',
-      expectedPrice: data.expectedPrice || 0,
-      actualPrice: data.expectedPrice || 0,
-      amountPaid: 0,
-      remainingAmount: data.expectedPrice || 0,
-      status: 'Pending Review',
+      expectedPrice: expectedPrice,
+      actualPrice: expectedPrice,
+      amountPaid: amountPaid,
+      remainingAmount: remainingAmount,
+      balanceUsed: balanceActuallyUsed,
+      paymentMethodUsed: paymentMethodUsed,
+      status: initialStatus,
       description: data.description ? data.description.trim() : '',
-      timeline: [initialTimeline],
+      timeline: initialTimeline,
       submissionWhatsAppStatus: 'pending',
       submissionWhatsAppMessageId: '',
       submissionWhatsAppSentAt: '',
@@ -737,15 +795,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const batch = writeBatch(db);
     batch.set(doc(db, 'requests', reqId), newRequest);
 
+    // If balance was used, deduct atomically and record Balance Transaction
+    if (balanceActuallyUsed > 0) {
+      const bTxId = 'BTX-' + Date.now();
+      const bTx: BalanceTransaction = {
+        id: bTxId,
+        userId: currentUser.id,
+        userName: currentUser.fullName,
+        userMobile: currentUser.mobileNumber,
+        type: 'Balance Used',
+        amount: balanceActuallyUsed,
+        previousBalance: prevBal,
+        remainingBalance: newBal,
+        date: dateStr,
+        time: timeStr,
+        timestamp: nowIso,
+        relatedRequestId: reqId,
+        relatedRequestTitle: data.productName.trim(),
+        actor: 'USER',
+        notes: `Used ₹${balanceActuallyUsed} for order #${reqId} (${data.productName.trim()})`,
+      };
+      batch.set(doc(db, 'balance_transactions', bTxId), sanitizeForFirestore(bTx));
+
+      batch.set(
+        doc(db, 'app_users', currentUser.mobileNumber),
+        { creditBalance: newBal, updatedAt: nowIso },
+        { merge: true }
+      );
+      if (currentUser.id && currentUser.id !== currentUser.mobileNumber) {
+        batch.set(
+          doc(db, 'app_users', currentUser.id),
+          { creditBalance: newBal, updatedAt: nowIso },
+          { merge: true }
+        );
+      }
+    }
+
     // 1. Notification for Admin Bell
     const adminNotifId = 'NOTIF-REQ-' + Date.now();
+    const adminMsg =
+      balanceActuallyUsed > 0
+        ? `${currentUser.fullName} submitted #${reqId} for "${data.productName}" (Paid ₹${balanceActuallyUsed} from DIGIZORT Balance${
+            remainingAmount > 0 ? `, remaining due: ₹${remainingAmount}` : ', fully paid'
+          }).`
+        : `${currentUser.fullName} submitted request #${reqId} for "${data.productName}".`;
+
     batch.set(
       doc(db, 'notifications', adminNotifId),
       sanitizeForFirestore({
         id: adminNotifId,
         targetUserMobile: 'ADMIN',
-        title: 'New Request',
-        message: `${currentUser.fullName} submitted request #${reqId} for "${data.productName}".`,
+        title: balanceActuallyUsed > 0 ? 'New Request (Paid with Balance)' : 'New Request',
+        message: adminMsg,
         type: 'new_request',
         timestamp: nowIso,
         read: false,
@@ -759,13 +860,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 2. Notification for User History
     const userNotifId = 'NOTIF-USR-' + Date.now();
+    const userMsg =
+      balanceActuallyUsed > 0
+        ? `Your request for "${data.productName}" (#${reqId}) was created. ₹${balanceActuallyUsed} was deducted from your DIGIZORT balance${
+            remainingAmount > 0 ? ` (Remaining due: ₹${remainingAmount})` : ' (Fully Paid)'
+          }.`
+        : `Your request for "${data.productName}" (#${reqId}) was successfully submitted and is under review.`;
+
     batch.set(
       doc(db, 'notifications', userNotifId),
       sanitizeForFirestore({
         id: userNotifId,
         targetUserMobile: currentUser.mobileNumber,
-        title: 'Request Submitted',
-        message: `Your request for "${data.productName}" (#${reqId}) was successfully submitted and is under review.`,
+        title: balanceActuallyUsed > 0 ? 'Request Created with Balance' : 'Request Submitted',
+        message: userMsg,
         type: 'request_submitted',
         timestamp: nowIso,
         read: false,
@@ -777,10 +885,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Commit the request write to Firestore FIRST
     await batch.commit();
 
-    showToast('New Request Submitted Successfully!');
+    if (balanceActuallyUsed > 0 && remainingAmount === 0) {
+      confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+    }
+
+    showToast(
+      balanceActuallyUsed > 0
+        ? `Order #${reqId} created! ₹${balanceActuallyUsed} paid from your DIGIZORT balance.`
+        : 'New Request Submitted Successfully!'
+    );
 
     // WORKFLOW 2 — Automatic WhatsApp Confirmation to Customer's Registered Mobile
-    // Runs after Firestore write succeeds. Request creation NEVER depends on WhatsApp outcome.
     (async () => {
       try {
         const customerMobile = currentUser.mobileNumber;
@@ -841,6 +956,158 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     })();
   };
 
+  // User Action: Pay for existing request using available DIGIZORT balance
+  const userPayRequestWithBalance = async (requestId: string, amountToUse: number) => {
+    if (!currentUser) throw new Error('Must be logged in to pay with balance.');
+    const reqRef = doc(db, 'requests', requestId);
+    const snap = await getDoc(reqRef);
+    if (!snap.exists()) throw new Error('Request not found.');
+
+    const req = snap.data() as OrderRequest;
+    if (req.userMobile !== currentUser.mobileNumber && req.userId !== currentUser.id) {
+      throw new Error('Unauthorized to modify this request.');
+    }
+    if (isRequestRejected(req) || req.status === 'Cancelled') {
+      throw new Error('Cannot pay for a rejected or cancelled request.');
+    }
+
+    const price = getRequestPrice(req);
+    const currentPaid = getRequestPaid(req);
+    const remDue = getRequestRemaining(req);
+
+    if (remDue <= 0) {
+      throw new Error('This request is already fully paid.');
+    }
+
+    const balInfo = getUserBalanceInfo(currentUser.mobileNumber, currentUser.id);
+    const prevBal = balInfo.availableBalance;
+    if (prevBal <= 0) {
+      throw new Error('You have no available DIGIZORT balance.');
+    }
+
+    const numAmount = Number(amountToUse);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      throw new Error('Please enter a valid amount greater than ₹0.');
+    }
+    if (numAmount > prevBal) {
+      throw new Error(`Amount cannot exceed your available balance of ₹${prevBal}.`);
+    }
+
+    const deduct = Math.min(numAmount, remDue);
+    const newPaid = currentPaid + deduct;
+    const newRem = Math.max(0, price - newPaid);
+    const newBal = Math.max(0, prevBal - deduct);
+    const newStatus: RequestStatus = newRem === 0 ? 'Paid' : 'Partially Paid';
+    const nowIso = new Date().toISOString();
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+    const batch = writeBatch(db);
+
+    const timelineEvt: TimelineEvent = {
+      id: 'EVT-' + Date.now(),
+      type: newRem === 0 ? 'TRANSACTION_COMPLETED' : 'PARTIAL_PAYMENT',
+      title: newRem === 0 ? 'Paid in Full using DIGIZORT Balance' : `Partial Payment with DIGIZORT Balance (₹${deduct})`,
+      timestamp: nowIso,
+      amountPaidThisStep: deduct,
+      totalPaidSoFar: newPaid,
+      remainingBalance: newRem,
+      notes: `Customer paid ₹${deduct} using available DIGIZORT balance.${
+        newRem === 0 ? ' Order is now fully paid.' : ` Remaining due: ₹${newRem}.`
+      }`,
+      actor: 'USER',
+    };
+
+    batch.update(
+      reqRef,
+      sanitizeForFirestore({
+        amountPaid: newPaid,
+        remainingAmount: newRem,
+        status: newStatus,
+        balanceUsed: (req.balanceUsed || 0) + deduct,
+        paymentMethodUsed: (req.balanceUsed || 0) + deduct >= price ? 'DIGIZORT Balance' : 'Split Payment',
+        timeline: [...(req.timeline || []), timelineEvt],
+        updatedAt: nowIso,
+      })
+    );
+
+    const bTxId = 'BTX-' + Date.now();
+    const bTx: BalanceTransaction = {
+      id: bTxId,
+      userId: currentUser.id,
+      userName: currentUser.fullName,
+      userMobile: currentUser.mobileNumber,
+      type: 'Balance Used',
+      amount: deduct,
+      previousBalance: prevBal,
+      remainingBalance: newBal,
+      date: dateStr,
+      time: timeStr,
+      timestamp: nowIso,
+      relatedRequestId: req.id,
+      relatedRequestTitle: req.productName,
+      actor: 'USER',
+      notes: `Used ₹${deduct} balance to pay for order #${req.id} (${req.productName})`,
+    };
+    batch.set(doc(db, 'balance_transactions', bTxId), sanitizeForFirestore(bTx));
+
+    batch.set(
+      doc(db, 'app_users', currentUser.mobileNumber),
+      { creditBalance: newBal, updatedAt: nowIso },
+      { merge: true }
+    );
+    if (currentUser.id && currentUser.id !== currentUser.mobileNumber) {
+      batch.set(
+        doc(db, 'app_users', currentUser.id),
+        { creditBalance: newBal, updatedAt: nowIso },
+        { merge: true }
+      );
+    }
+
+    // Admin bell
+    const adminNotifId = 'NOTIF-ADM-BAL-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', adminNotifId),
+      sanitizeForFirestore({
+        id: adminNotifId,
+        targetUserMobile: 'ADMIN',
+        title: 'Payment from Balance',
+        message: `${currentUser.fullName} paid ₹${deduct} using balance for #${req.id} (${req.productName}).`,
+        type: 'payment_recorded',
+        timestamp: nowIso,
+        read: false,
+        requestId: req.id,
+        relatedRequestId: req.id,
+      })
+    );
+
+    // User notification
+    const userNotifId = 'NOTIF-USR-BAL-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', userNotifId),
+      sanitizeForFirestore({
+        id: userNotifId,
+        targetUserMobile: currentUser.mobileNumber,
+        title: newRem === 0 ? 'Order Fully Paid' : 'Payment Recorded from Balance',
+        message: `₹${deduct} was deducted from your DIGIZORT balance for #${req.id}.${
+          newRem === 0 ? ' Order is now completely paid!' : ` Remaining amount due: ₹${newRem}.`
+        }`,
+        type: 'payment_recorded',
+        timestamp: nowIso,
+        read: false,
+        requestId: req.id,
+      })
+    );
+
+    await batch.commit();
+
+    if (newRem === 0) {
+      confetti({ particleCount: 80, spread: 60, origin: { y: 0.6 } });
+    }
+    showToast(`Paid ₹${deduct} from balance for "${req.productName}"`);
+  };
+
   const userCancelRequest = async (requestId: string) => {
     if (!currentUser) throw new Error('Must be logged in to cancel a request.');
     const docRef = doc(db, 'requests', requestId);
@@ -853,29 +1120,98 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw new Error('Unauthorized: You can only cancel your own requests.');
     }
 
-    if (req.status !== 'Pending Review') {
-      showToast('Only requests in "Pending Review" status can be cancelled.');
+    // Allow cancelling if pending or partially paid / paid before admin fulfillment begins
+    const isProcessingOrCompleted = req.timeline?.some(
+      (t) => t.type === 'PROCESSING' || t.type === 'ORDERED' || t.type === 'TRANSACTION_COMPLETED' && t.actor === 'ADMIN'
+    );
+    if (req.status !== 'Pending Review' && req.status !== 'Partially Paid' && req.status !== 'Accepted' && isProcessingOrCompleted) {
+      showToast('This request is already processing and cannot be cancelled.');
       return;
     }
 
     const nowIso = new Date().toISOString();
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+
     const cancelEvt: TimelineEvent = {
       id: 'EVT-' + Date.now(),
       type: 'REQUEST_REJECTED',
       title: 'Request Cancelled by Customer',
       timestamp: nowIso,
       totalPaidSoFar: req.amountPaid || 0,
-      remainingBalance: req.remainingAmount || 0,
-      notes: 'Cancelled by customer before admin review.',
+      remainingBalance: 0,
+      notes: 'Cancelled by customer before fulfillment.',
       actor: 'USER',
     };
 
+    const updatedTimeline = [...(req.timeline || []), cancelEvt];
+
+    // If user used balance, refund it back safely!
+    const balanceUsed = req.balanceUsed || 0;
+    const balanceAlreadyRefunded = req.balanceRefunded || 0;
+    const toRefund = Math.max(0, balanceUsed - balanceAlreadyRefunded);
+
     const batch = writeBatch(db);
-    batch.update(docRef, {
+
+    if (toRefund > 0) {
+      const balInfo = getUserBalanceInfo(req.userMobile, req.userId);
+      const prevBal = balInfo.availableBalance;
+      const newBal = prevBal + toRefund;
+      const bTxId = 'BTX-REFUND-' + Date.now();
+
+      const bTx: BalanceTransaction = {
+        id: bTxId,
+        userId: currentUser.id,
+        userName: currentUser.fullName,
+        userMobile: currentUser.mobileNumber,
+        type: 'Balance Returned',
+        amount: toRefund,
+        previousBalance: prevBal,
+        remainingBalance: newBal,
+        date: dateStr,
+        time: timeStr,
+        timestamp: nowIso,
+        relatedRequestId: req.id,
+        relatedRequestTitle: req.productName,
+        actor: 'USER',
+        reason: 'Refund for Cancelled Request',
+        notes: `₹${toRefund} balance refunded because customer cancelled request #${req.id}`,
+      };
+      batch.set(doc(db, 'balance_transactions', bTxId), sanitizeForFirestore(bTx));
+
+      batch.set(
+        doc(db, 'app_users', currentUser.mobileNumber),
+        { creditBalance: newBal, updatedAt: nowIso },
+        { merge: true }
+      );
+      if (currentUser.id && currentUser.id !== currentUser.mobileNumber) {
+        batch.set(
+          doc(db, 'app_users', currentUser.id),
+          { creditBalance: newBal, updatedAt: nowIso },
+          { merge: true }
+        );
+      }
+
+      updatedTimeline.push({
+        id: 'EVT-REFUND-' + Date.now(),
+        type: 'BALANCE_REFUNDED',
+        title: `₹${toRefund} Refunded to DIGIZORT Balance`,
+        timestamp: nowIso,
+        totalPaidSoFar: 0,
+        remainingBalance: 0,
+        notes: `Balance used of ₹${toRefund} was restored to customer account balance.`,
+        actor: 'USER',
+      });
+    }
+
+    batch.update(docRef, sanitizeForFirestore({
       status: 'Cancelled',
-      timeline: [...(req.timeline || []), cancelEvt],
+      remainingAmount: 0,
+      balanceRefunded: (req.balanceRefunded || 0) + toRefund,
+      timeline: updatedTimeline,
       updatedAt: nowIso,
-    });
+    }));
 
     const adminNotifId = 'NOTIF-CAN-' + Date.now();
     batch.set(
@@ -884,7 +1220,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: adminNotifId,
         targetUserMobile: 'ADMIN',
         title: 'Request Cancelled',
-        message: `${req.userName || 'Customer'} cancelled request #${req.id} for "${req.productName}".`,
+        message: `${req.userName || 'Customer'} cancelled request #${req.id} for "${req.productName}".${
+          toRefund > 0 ? ` ₹${toRefund} balance was refunded to customer.` : ''
+        }`,
         type: 'request_cancelled',
         timestamp: nowIso,
         read: false,
@@ -895,9 +1233,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
+    if (toRefund > 0) {
+      const userNotifId = 'NOTIF-USR-REFUND-' + Date.now();
+      batch.set(
+        doc(db, 'notifications', userNotifId),
+        sanitizeForFirestore({
+          id: userNotifId,
+          targetUserMobile: currentUser.mobileNumber,
+          title: 'Request Cancelled - Balance Restored',
+          message: `Your request #${req.id} was cancelled. ₹${toRefund} used from your DIGIZORT balance has been fully refunded to your account.`,
+          type: 'info',
+          timestamp: nowIso,
+          read: false,
+          requestId: req.id,
+        })
+      );
+    }
+
     await batch.commit();
 
-    showToast('Request cancelled.');
+    showToast(
+      toRefund > 0
+        ? `Request cancelled. ₹${toRefund} balance has been restored to your account.`
+        : 'Request cancelled.'
+    );
   };
 
   const userEditRequest = async (
@@ -1005,6 +1364,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const req = snap.data() as OrderRequest;
     const nowIso = new Date().toISOString();
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+    const balanceUsed = req.balanceUsed || 0;
+    const balanceAlreadyRefunded = req.balanceRefunded || 0;
+    const toRefund = Math.max(0, balanceUsed - balanceAlreadyRefunded);
+
+    const batch = writeBatch(db);
 
     const newTimelineEvt: TimelineEvent = {
       id: 'EVT-' + Date.now(),
@@ -1017,31 +1385,95 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       actor: 'ADMIN',
     };
 
-    await updateDoc(docRef, sanitizeForFirestore({
+    const updatedTimeline = [...(req.timeline || []), newTimelineEvt];
+
+    if (toRefund > 0) {
+      const balInfo = getUserBalanceInfo(req.userMobile, req.userId);
+      const prevBal = balInfo.availableBalance;
+      const newBal = prevBal + toRefund;
+      const bTxId = 'BTX-REFUND-' + Date.now();
+
+      const bTx: BalanceTransaction = {
+        id: bTxId,
+        userId: req.userId || '',
+        userName: req.userName,
+        userMobile: req.userMobile,
+        type: 'Balance Returned',
+        amount: toRefund,
+        previousBalance: prevBal,
+        remainingBalance: newBal,
+        date: dateStr,
+        time: timeStr,
+        timestamp: nowIso,
+        relatedRequestId: req.id,
+        relatedRequestTitle: req.productName,
+        actor: 'ADMIN',
+        reason: 'Refund for Rejected Request',
+        notes: `₹${toRefund} balance refunded because request was rejected: ${reasonNotes}`,
+      };
+      batch.set(doc(db, 'balance_transactions', bTxId), sanitizeForFirestore(bTx));
+
+      if (req.userMobile) {
+        batch.set(
+          doc(db, 'app_users', req.userMobile),
+          { creditBalance: newBal, updatedAt: nowIso },
+          { merge: true }
+        );
+      }
+      if (req.userId && req.userId !== req.userMobile) {
+        batch.set(
+          doc(db, 'app_users', req.userId),
+          { creditBalance: newBal, updatedAt: nowIso },
+          { merge: true }
+        );
+      }
+
+      updatedTimeline.push({
+        id: 'EVT-REFUND-' + Date.now(),
+        type: 'BALANCE_REFUNDED',
+        title: `₹${toRefund} Refunded to DIGIZORT Balance`,
+        timestamp: nowIso,
+        totalPaidSoFar: 0,
+        remainingBalance: 0,
+        notes: `Balance used of ₹${toRefund} was restored to customer account balance.`,
+        actor: 'ADMIN',
+      });
+    }
+
+    batch.update(docRef, sanitizeForFirestore({
       status: 'Rejected',
       rejectedAt: nowIso,
       rejectedBy: 'ADMIN',
       rejectionNote: reasonNotes,
       remainingAmount: 0,
       adminNotes: reasonNotes,
-      timeline: [...(req.timeline || []), newTimelineEvt],
+      balanceRefunded: (req.balanceRefunded || 0) + toRefund,
+      timeline: updatedTimeline,
       updatedAt: nowIso,
     }));
 
     // Notify user
     const notifId = 'NOTIF-' + Date.now();
-    await setDoc(doc(db, 'notifications', notifId), sanitizeForFirestore({
+    batch.set(doc(db, 'notifications', notifId), sanitizeForFirestore({
       id: notifId,
       targetUserMobile: req.userMobile,
-      title: 'Request Declined',
-      message: `Your request "${req.productName}" was declined: ${reasonNotes}`,
+      title: toRefund > 0 ? 'Request Declined - Balance Refunded' : 'Request Declined',
+      message: toRefund > 0
+        ? `Your request "${req.productName}" was declined: ${reasonNotes}. ₹${toRefund} used from your DIGIZORT balance has been fully refunded back to your account.`
+        : `Your request "${req.productName}" was declined: ${reasonNotes}`,
       type: 'status_change',
       timestamp: nowIso,
       read: false,
       requestId: requestId,
     }));
 
-    showToast('Request marked as Rejected.');
+    await batch.commit();
+
+    showToast(
+      toRefund > 0
+        ? `Request marked as Rejected. ₹${toRefund} balance refunded to ${req.userName}.`
+        : 'Request marked as Rejected.'
+    );
   };
 
   const adminDeleteRequest = async (requestId: string) => {
@@ -2355,6 +2787,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         loginAsAdmin,
         logoutUser,
         submitNewRequest,
+        userPayRequestWithBalance,
         userCancelRequest,
         userEditRequest,
         updateUserProfile,

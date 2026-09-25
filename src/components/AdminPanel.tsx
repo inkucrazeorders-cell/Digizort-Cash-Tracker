@@ -977,6 +977,12 @@ export const AdminPanel: React.FC = () => {
                             {req.userName} ({req.userMobile})
                           </span>
                           {getStatusBadge(req.status)}
+                          {req.balanceUsed && req.balanceUsed > 0 && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                              <Coins className="w-3 h-3 text-emerald-400" />
+                              <span>Paid with Balance: {settings.currencySymbol}{req.balanceUsed.toLocaleString('en-IN')}</span>
+                            </span>
+                          )}
                           {(() => {
                             const userBal = getUserBalanceInfo(req.userMobile, req.userId);
                             const pendingExtra = getRequestPendingExtraCash(req);

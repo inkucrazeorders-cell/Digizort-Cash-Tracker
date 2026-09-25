@@ -234,22 +234,32 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
 
             {/* ACTION 2: REJECT */}
             {actionType === 'reject' && (
-              <div>
-                <label className="block text-xs font-bold text-zinc-300 mb-1">
-                  Rejection Reason <span className="text-rose-400">*</span>
-                </label>
-                <textarea
-                  rows={3}
-                  required
-                  placeholder="e.g. Item unavailable, out of stock, or customer requested cancellation..."
-                  value={adminNote}
-                  onChange={(e) => setAdminNote(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-rose-500 resize-none"
-                  id="textarea-rejection-reason"
-                />
-                <p className="text-[11px] text-zinc-500 mt-1">
-                  This request will be moved to "Rejected Requests" and excluded from all active calculations.
-                </p>
+              <div className="space-y-3">
+                {request.balanceUsed && request.balanceUsed > 0 && (
+                  <div className="p-3 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs flex items-center gap-2">
+                    <Coins className="w-4 h-4 shrink-0 text-amber-400" />
+                    <span>
+                      <strong>Balance Refund Notice:</strong> ₹{request.balanceUsed.toLocaleString('en-IN')} was paid using {request.userName}'s DIGIZORT Balance. This will be automatically refunded back to their account balance upon rejection.
+                    </span>
+                  </div>
+                )}
+                <div>
+                  <label className="block text-xs font-bold text-zinc-300 mb-1">
+                    Rejection Reason <span className="text-rose-400">*</span>
+                  </label>
+                  <textarea
+                    rows={3}
+                    required
+                    placeholder="e.g. Item unavailable, out of stock, or customer requested cancellation..."
+                    value={adminNote}
+                    onChange={(e) => setAdminNote(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-rose-500 resize-none"
+                    id="textarea-rejection-reason"
+                  />
+                  <p className="text-[11px] text-zinc-500 mt-1">
+                    This request will be moved to "Rejected Requests" and excluded from all active calculations.
+                  </p>
+                </div>
               </div>
             )}
 

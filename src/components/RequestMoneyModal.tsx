@@ -6,6 +6,7 @@ import { useApp } from '../context/AppContext';
 interface RequestMoneyModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onOpenNewRequest?: () => void;
   availableBalance: number;
   pendingRequestedAmount: number;
   requestableBalance: number;
@@ -14,6 +15,7 @@ interface RequestMoneyModalProps {
 export const RequestMoneyModal: React.FC<RequestMoneyModalProps> = ({
   isOpen,
   onClose,
+  onOpenNewRequest,
   availableBalance,
   pendingRequestedAmount,
   requestableBalance,
@@ -97,15 +99,34 @@ export const RequestMoneyModal: React.FC<RequestMoneyModalProps> = ({
         </button>
 
         {/* Modal Header */}
-        <div className="flex items-center gap-3 mb-5">
+        <div className="flex items-center gap-3 mb-4">
           <div className="w-11 h-11 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0">
             <ArrowDownToLine className="w-6 h-6" />
           </div>
           <div>
-            <h3 className="text-lg font-extrabold text-white">Request Money</h3>
-            <p className="text-xs text-zinc-400">Withdraw or receive your available credit balance</p>
+            <h3 className="text-lg font-extrabold text-white">Request a Withdrawal</h3>
+            <p className="text-xs text-zinc-400">Withdraw or receive your available DIGIZORT balance</p>
           </div>
         </div>
+
+        {/* Tip: Balance is Universal */}
+        {onOpenNewRequest && availableBalance > 0 && (
+          <div className="p-3 rounded-2xl bg-gradient-to-r from-emerald-950/40 to-zinc-950 border border-emerald-500/30 flex items-center justify-between gap-2.5 mb-4 text-xs">
+            <div className="flex items-center gap-2 text-zinc-300">
+              <Coins className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>
+                Want to buy a product or recharge? Use your balance directly!
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenNewRequest}
+              className="px-2.5 py-1 rounded-lg bg-[#E53935] hover:brightness-110 text-white font-bold text-[11px] shrink-0 transition-all"
+            >
+              Use for Request
+            </button>
+          </div>
+        )}
 
         {/* Balance Overview Card */}
         <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 space-y-2 mb-5">

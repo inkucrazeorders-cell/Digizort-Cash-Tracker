@@ -47,6 +47,8 @@ import {
 import { BalanceLedgerView } from './BalanceLedgerView';
 import { RequestMoneyModal } from './RequestMoneyModal';
 import { UserBalanceRequestsList } from './UserBalanceRequestsList';
+import { PayWithBalanceModal } from './PayWithBalanceModal';
+import { Wallet } from 'lucide-react';
 
 export const UserPortal: React.FC = () => {
   const {
@@ -68,6 +70,8 @@ export const UserPortal: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'requests' | 'timeline' | 'documents' | 'notifications' | 'profile' | 'balance'>('requests');
   const [isNewRequestOpen, setIsNewRequestOpen] = useState(false);
+  const [newRequestInitialUseBalance, setNewRequestInitialUseBalance] = useState(false);
+  const [payWithBalanceReq, setPayWithBalanceReq] = useState<OrderRequest | null>(null);
   const [isRequestMoneyOpen, setIsRequestMoneyOpen] = useState(false);
   const [selectedReq, setSelectedReq] = useState<OrderRequest | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -322,7 +326,7 @@ export const UserPortal: React.FC = () => {
             </button>
           </div>
 
-          {/* User Store Credit & Balance Banner (When available or previously used) */}
+          {/* User Universal Available DIGIZORT Balance Banner */}
           {(() => {
             const userBalInfo = getUserBalanceInfo(currentUser.mobileNumber, currentUser.id);
             const availableBalance = userBalInfo.availableBalance;
@@ -330,47 +334,58 @@ export const UserPortal: React.FC = () => {
 
             if (availableBalance > 0) {
               return (
-                <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/40 to-zinc-950 border border-emerald-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+                <div className="p-4 rounded-3xl bg-gradient-to-r from-emerald-950/50 via-zinc-900 to-zinc-950 border border-emerald-500/40 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xl">
                   <div className="flex items-center gap-3.5">
                     <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0">
-                      <Coins className="w-6 h-6" />
+                      <Wallet className="w-6 h-6" />
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-extrabold text-emerald-400 uppercase tracking-wider">
-                          Available Store Credit / Balance
+                        <span className="text-[10px] font-extrabold text-emerald-400 uppercase tracking-widest">
+                          Available DIGIZORT Balance
                         </span>
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                          Active
+                          Universal Balance
                         </span>
                       </div>
-                      <div className="text-2xl font-black text-white mt-0.5">
+                      <div className="text-2xl sm:text-3xl font-black text-white mt-0.5 tracking-tight">
                         {settings.currencySymbol}{availableBalance.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </div>
-                      <p className="text-[11px] text-zinc-400">
+                      <p className="text-[11px] text-zinc-300">
                         {userBalInfo.pendingRequestedAmount > 0
-                          ? `(Pending requests: ₹${userBalInfo.pendingRequestedAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })})`
-                          : 'This balance is in your account and can be requested anytime.'}
+                          ? `(Pending withdrawal: ₹${userBalInfo.pendingRequestedAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}) • Use for new orders, recharges, or withdrawal.`
+                          : 'Use your balance to pay for new requests, recharges & services, or request a withdrawal anytime.'}
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 self-start sm:self-auto shrink-0 flex-wrap">
+                  <div className="flex items-center gap-2 self-start md:self-auto shrink-0 flex-wrap">
+                    <button
+                      onClick={() => {
+                        setNewRequestInitialUseBalance(true);
+                        setIsNewRequestOpen(true);
+                      }}
+                      className="py-2.5 px-4 bg-gradient-to-r from-[#E53935] to-[#B71C1C] hover:brightness-110 text-white font-extrabold text-xs rounded-xl shadow-lg shadow-[#E53935]/25 flex items-center justify-center gap-1.5 transition-all"
+                      id="btn-user-use-balance-request"
+                    >
+                      <PlusCircle className="w-3.5 h-3.5" />
+                      <span>Use Balance for a Request</span>
+                    </button>
                     <button
                       onClick={() => setIsRequestMoneyOpen(true)}
                       disabled={requestableBalance <= 0}
-                      className="py-2 px-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all"
+                      className="py-2.5 px-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all"
                       id="btn-user-banner-request-money"
                     >
                       <ArrowDownToLine className="w-3.5 h-3.5" />
-                      <span>Request Money</span>
+                      <span>Request a Withdrawal</span>
                     </button>
                     <button
                       onClick={() => setActiveTab('balance')}
-                      className="py-2 px-3.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white font-bold text-xs rounded-xl border border-zinc-700 flex items-center justify-center gap-1.5 transition-all"
+                      className="py-2.5 px-3.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white font-bold text-xs rounded-xl border border-zinc-700 flex items-center justify-center gap-1.5 transition-all"
                       id="btn-user-view-balance-ledger"
                     >
                       <Coins className="w-3.5 h-3.5" />
-                      <span>View Details</span>
+                      <span>View History</span>
                     </button>
                   </div>
                 </div>
@@ -382,7 +397,7 @@ export const UserPortal: React.FC = () => {
                 <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 flex items-center justify-between gap-2 text-xs">
                   <div className="flex items-center gap-2 text-zinc-300">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span>Store Credit Balance: <strong className="text-white">{settings.currencySymbol}0</strong> (All previous balances have been settled/cleared)</span>
+                    <span>DIGIZORT Balance: <strong className="text-white">{settings.currencySymbol}0</strong> (All previous balances have been settled/cleared)</span>
                   </div>
                   <button
                     onClick={() => setActiveTab('balance')}
@@ -607,6 +622,12 @@ export const UserPortal: React.FC = () => {
                             {req.requestType}
                           </span>
                           {getStatusBadge(req.status)}
+                          {req.balanceUsed && req.balanceUsed > 0 && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                              <Wallet className="w-3 h-3 text-emerald-400" />
+                              <span>Paid with Balance: {settings.currencySymbol}{req.balanceUsed.toLocaleString('en-IN')}</span>
+                            </span>
+                          )}
                           {hasOffer && (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
                               <Sparkles className="w-3 h-3 text-amber-400" />
@@ -688,6 +709,19 @@ export const UserPortal: React.FC = () => {
                         </div>
 
                         <div className="flex items-center gap-2">
+                          {rem > 0 && getUserBalanceInfo(currentUser.mobileNumber, currentUser.id).availableBalance > 0 && !isRequestRejected(req) && req.status !== 'Cancelled' && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPayWithBalanceReq(req);
+                              }}
+                              className="py-1.5 px-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all shrink-0"
+                              title="Pay remaining order balance using your available DIGIZORT balance"
+                            >
+                              <Coins className="w-3.5 h-3.5" />
+                              <span className="hidden sm:inline">Pay with Balance</span>
+                            </button>
+                          )}
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1018,10 +1052,10 @@ export const UserPortal: React.FC = () => {
             <div className="space-y-6">
               {/* Prominent Available Balance Section */}
               <div className="p-6 rounded-3xl bg-gradient-to-br from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 shadow-xl space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="space-y-1">
                     <span className="text-[10px] font-extrabold uppercase tracking-widest text-emerald-400 block">
-                      USER BALANCE SECTION
+                      UNIVERSAL DIGIZORT BALANCE
                     </span>
                     <span className="text-xs text-zinc-400 font-medium block">
                       Available Balance
@@ -1037,27 +1071,42 @@ export const UserPortal: React.FC = () => {
                         </span>
                       )}
                     </div>
+                    <p className="text-xs text-zinc-400 max-w-md pt-0.5">
+                      Your universal balance can be used to pay for new requests, recharges & services, or requested as a withdrawal anytime.
+                    </p>
                   </div>
 
-                  {/* Request Money Action */}
-                  <div className="flex flex-col sm:items-end gap-2">
+                  {/* Actions Grid */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                    <button
+                      onClick={() => {
+                        setNewRequestInitialUseBalance(true);
+                        setIsNewRequestOpen(true);
+                      }}
+                      className="py-3 px-4 bg-gradient-to-r from-[#E53935] to-[#B71C1C] hover:brightness-110 text-white font-extrabold text-xs rounded-2xl shadow-lg shadow-[#E53935]/25 flex items-center justify-center gap-2 transition-all"
+                      id="btn-user-use-balance-tab"
+                    >
+                      <PlusCircle className="w-4 h-4" />
+                      <span>Use Balance for a Request</span>
+                    </button>
                     <button
                       onClick={() => setIsRequestMoneyOpen(true)}
                       disabled={availableBalance <= 0 || requestableBalance <= 0}
-                      className="py-3 px-5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 disabled:opacity-40 disabled:pointer-events-none text-white font-extrabold text-xs rounded-2xl shadow-xl shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all"
+                      className="py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 disabled:opacity-40 disabled:pointer-events-none text-white font-extrabold text-xs rounded-2xl shadow-xl shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all"
                       id="btn-user-request-money"
                     >
                       <ArrowDownToLine className="w-4 h-4" />
-                      <span>Request Money</span>
+                      <span>Request a Withdrawal</span>
                     </button>
-                    {pendingRequestedAmount > 0 && (
-                      <span className="text-[11px] text-amber-300 font-medium flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-amber-400" />
-                        <span>Pending Request: {settings.currencySymbol}{pendingRequestedAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-                      </span>
-                    )}
                   </div>
                 </div>
+
+                {pendingRequestedAmount > 0 && (
+                  <div className="flex items-center gap-1.5 text-xs text-amber-300 pt-1">
+                    <Clock className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Pending Withdrawal Requests: {settings.currencySymbol}{pendingRequestedAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
 
                 {/* Sub-card details for pending / requestable breakdown */}
                 {pendingRequestedAmount > 0 && (
@@ -1247,21 +1296,39 @@ export const UserPortal: React.FC = () => {
             </button>
 
             <div className="space-y-1">
-              <div className="flex items-center justify-between pr-8">
+              <div className="flex items-center justify-between pr-8 flex-wrap gap-2">
                 <h3 className="text-lg font-extrabold text-white">{selectedReq.productName}</h3>
-                {selectedReq.status === 'Pending Review' && (
-                  <button
-                    onClick={async () => {
-                      if (confirm('Are you sure you want to cancel this order request?')) {
-                        await userCancelRequest(selectedReq.id);
-                        setSelectedReq(null);
-                      }
-                    }}
-                    className="py-1.5 px-3 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white font-bold text-xs rounded-xl transition-all border border-rose-500/30"
-                  >
-                    Cancel Request
-                  </button>
-                )}
+                <div className="flex items-center gap-2">
+                  {getRequestRemaining(selectedReq) > 0 &&
+                    getUserBalanceInfo(currentUser.mobileNumber, currentUser.id).availableBalance > 0 &&
+                    !isRequestRejected(selectedReq) &&
+                    selectedReq.status !== 'Cancelled' && (
+                      <button
+                        onClick={() => {
+                          const req = selectedReq;
+                          setSelectedReq(null);
+                          setPayWithBalanceReq(req);
+                        }}
+                        className="py-1.5 px-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 text-white font-extrabold text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-md shadow-emerald-600/20"
+                      >
+                        <Coins className="w-3.5 h-3.5" />
+                        <span>Pay with Balance</span>
+                      </button>
+                    )}
+                  {selectedReq.status === 'Pending Review' && (
+                    <button
+                      onClick={async () => {
+                        if (confirm('Are you sure you want to cancel this order request? Any balance used will be refunded to your account.')) {
+                          await userCancelRequest(selectedReq.id);
+                          setSelectedReq(null);
+                        }
+                      }}
+                      className="py-1.5 px-3 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white font-bold text-xs rounded-xl transition-all border border-rose-500/30"
+                    >
+                      Cancel Request
+                    </button>
+                  )}
+                </div>
               </div>
               <p className="text-xs text-zinc-400">{selectedReq.purpose} • #{selectedReq.id}</p>
             </div>
@@ -1293,7 +1360,20 @@ export const UserPortal: React.FC = () => {
       {isNewRequestOpen && (
         <NewRequestModal
           isOpen={isNewRequestOpen}
-          onClose={() => setIsNewRequestOpen(false)}
+          initialUseBalance={newRequestInitialUseBalance}
+          onClose={() => {
+            setIsNewRequestOpen(false);
+            setNewRequestInitialUseBalance(false);
+          }}
+        />
+      )}
+
+      {/* Pay With Balance Modal */}
+      {payWithBalanceReq && (
+        <PayWithBalanceModal
+          isOpen={Boolean(payWithBalanceReq)}
+          onClose={() => setPayWithBalanceReq(null)}
+          request={payWithBalanceReq}
         />
       )}
 
@@ -1304,6 +1384,11 @@ export const UserPortal: React.FC = () => {
           <RequestMoneyModal
             isOpen={isRequestMoneyOpen}
             onClose={() => setIsRequestMoneyOpen(false)}
+            onOpenNewRequest={() => {
+              setIsRequestMoneyOpen(false);
+              setNewRequestInitialUseBalance(true);
+              setIsNewRequestOpen(true);
+            }}
             availableBalance={balInfo.availableBalance}
             pendingRequestedAmount={balInfo.pendingRequestedAmount}
             requestableBalance={balInfo.requestableBalance}

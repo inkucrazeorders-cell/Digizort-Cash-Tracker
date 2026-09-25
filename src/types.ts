@@ -63,7 +63,9 @@ export type TimelineEventType =
   | 'TRANSACTION_COMPLETED'
   | 'CANCELLED'
   | 'NOTE_ADDED'
-  | 'OFFER_APPLIED';
+  | 'OFFER_APPLIED'
+  | 'BALANCE_USED'
+  | 'BALANCE_REFUNDED';
 
 export interface TimelineEvent {
   id: string;
@@ -132,6 +134,11 @@ export interface OrderRequest {
   submissionWhatsAppMessageId?: string;
   submissionWhatsAppSentAt?: string;
   submissionWhatsAppError?: string;
+  // Universal Balance Payment fields
+  balanceUsed?: number;
+  externalPaymentPaid?: number;
+  paymentMethodUsed?: 'DIGIZORT Balance' | 'External Payment' | 'Split Payment' | string;
+  balanceRefunded?: number;
   // Compatibility fields for transaction legacy support
   amount?: number;
   category?: string;

@@ -652,6 +652,23 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
           )}
         </div>
 
+        {/* DIGIZORT Universal Balance Payment Breakdown Strip */}
+        {currentTransaction.balanceUsed && currentTransaction.balanceUsed > 0 && (
+          <div className="p-3 rounded-2xl bg-zinc-900/90 border border-emerald-500/30 flex items-center justify-between text-xs flex-wrap gap-2">
+            <div className="flex items-center gap-2">
+              <Coins className="w-4 h-4 text-emerald-400" />
+              <span className="text-zinc-400">Paid from DIGIZORT Balance:</span>
+              <strong className="text-emerald-400 font-extrabold">{settings.currencySymbol}{currentTransaction.balanceUsed.toLocaleString('en-IN')}</strong>
+            </div>
+            {paidAmount > currentTransaction.balanceUsed && (
+              <div className="flex items-center gap-1.5 text-zinc-400">
+                <span>External / Cash Paid:</span>
+                <strong className="text-white font-bold">{settings.currencySymbol}{(paidAmount - currentTransaction.balanceUsed).toLocaleString('en-IN')}</strong>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ADMIN QUICK CASH ACTIONS (Direct inside statement - STRICTLY ADMIN ONLY) */}
         {allowAdminFinancialControls && (remainingAmount > 0 || customerAvailableCredit > 0 || currentTransaction.extraCashPaid || userBalInfo.hasTransactions) && (
           <div className="p-3.5 rounded-2xl bg-zinc-900/95 border border-zinc-800 space-y-2.5">
