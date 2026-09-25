@@ -44,7 +44,7 @@ export default async function handler(req: Request, res: Response) {
 
     const token = process.env.WHATSAPP_API_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN;
     const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '496013146934162';
-    const apiVersion = process.env.WHATSAPP_API_VERSION || 'v26.0';
+    const apiVersion = process.env.WHATSAPP_API_VERSION || 'v21.0';
 
     if (!token || !phoneNumberId) {
       return sendJsonResponse(res, 400, {
