@@ -117,6 +117,22 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // 7. Support Tickets collection (Feedback, Suggestions, Problem Reports, Conversation Thread)
+    match /support_tickets/{ticketId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
+      allow delete: if false;
+    }
+
+    // 8. Announcements collection (Official DIGIZORT Broadcasts & Targeted Notices)
+    match /announcements/{announcementId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
+      allow delete: if false;
+    }
+
     // Legacy fallback user documents
     match /users/{userId} {
       allow read, write: if true;

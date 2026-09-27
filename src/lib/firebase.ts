@@ -22,6 +22,7 @@ import {
   deleteDoc,
   updateDoc,
   writeBatch,
+  arrayUnion,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -55,5 +56,6 @@ export {
   deleteDoc,
   updateDoc,
   writeBatch,
+  arrayUnion,
 };
 export type { User };

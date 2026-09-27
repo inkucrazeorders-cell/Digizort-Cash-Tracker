@@ -13,6 +13,15 @@ import {
   BalanceRequest,
   BalanceRequestStatus,
   PriceAdjustment,
+  SupportTicket,
+  SupportTicketType,
+  SupportTicketStatus,
+  SupportMessage,
+  SupportTechnicalContext,
+  Announcement,
+  AnnouncementType,
+  AnnouncementAudienceType,
+  AnnouncementStatus,
 } from '../types';
 import {
   db,
@@ -26,6 +35,7 @@ import {
   deleteDoc,
   updateDoc,
   writeBatch,
+  arrayUnion,
 } from '../lib/firebase';
 import {
   getRequestPrice,
@@ -188,6 +198,57 @@ interface AppContextType {
   adminUnsuspendUser: (userId: string) => Promise<void>;
   adminDeleteUser: (userId: string) => Promise<void>;
 
+  // Support & Help Desk System
+  supportTickets: SupportTicket[];
+  createSupportTicket: (params: {
+    type: SupportTicketType;
+    category: string;
+    subject: string;
+    description: string;
+    attachmentUrl?: string;
+    relatedRequestId?: string;
+    technicalContext?: SupportTechnicalContext;
+  }) => Promise<SupportTicket>;
+  addSupportTicketMessage: (params: {
+    ticketId: string;
+    text: string;
+    attachmentUrl?: string;
+  }) => Promise<void>;
+  adminUpdateSupportTicketStatus: (params: {
+    ticketId: string;
+    status: SupportTicketStatus;
+    adminNotes?: string;
+  }) => Promise<void>;
+
+  // Announcements System (Official Broadcasts & Targeted Notices)
+  announcements: Announcement[];
+  userAnnouncements: Announcement[];
+  unreadAnnouncementsCount: number;
+  createAnnouncement: (params: {
+    title: string;
+    message: string;
+    type: AnnouncementType;
+    imageUrl?: string;
+    audienceType: AnnouncementAudienceType;
+    targetUserMobiles?: string[];
+    targetUserNames?: string[];
+    targetService?: string;
+    sendPush?: boolean;
+    status: AnnouncementStatus;
+    scheduledAt?: string;
+    expiresAt?: string;
+  }) => Promise<Announcement>;
+  updateAnnouncementDraft: (
+    announcementId: string,
+    params: Partial<Announcement>
+  ) => Promise<void>;
+  publishAnnouncementNow: (announcementId: string) => Promise<void>;
+  scheduleAnnouncement: (announcementId: string, scheduledAt: string) => Promise<void>;
+  cancelScheduledAnnouncement: (announcementId: string) => Promise<void>;
+  archiveAnnouncement: (announcementId: string) => Promise<void>;
+  markAnnouncementAsRead: (announcementId: string) => Promise<void>;
+  markAllAnnouncementsAsRead: () => Promise<void>;
+
   // Toast
   toastMessage: string | null;
   showToast: (msg: string) => void;
@@ -245,6 +306,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [groupPayments, setGroupPayments] = useState<GroupPayment[]>([]);
   const [balanceTransactions, setBalanceTransactions] = useState<BalanceTransaction[]>([]);
   const [balanceRequests, setBalanceRequests] = useState<BalanceRequest[]>([]);
+  const [supportTickets, setSupportTickets] = useState<SupportTicket[]>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -489,6 +552,112 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => unsubscribe();
   }, []);
 
+  // Real-time listener for SUPPORT TICKETS from Firestore with strict isolation
+  useEffect(() => {
+    if (!currentUser && !isAdmin) {
+      setSupportTickets([]);
+      return;
+    }
+
+    let tktQuery;
+    if (isAdmin) {
+      tktQuery = collection(db, 'support_tickets');
+    } else {
+      const userMobile = currentUser.mobileNumber;
+      tktQuery = query(
+        collection(db, 'support_tickets'),
+        where('userMobile', '==', userMobile)
+      );
+    }
+
+    const unsubscribe = onSnapshot(
+      tktQuery,
+      (snapshot) => {
+        const fetched: SupportTicket[] = [];
+        snapshot.forEach((doc) => {
+          fetched.push({ id: doc.id, ...doc.data() } as SupportTicket);
+        });
+        fetched.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setSupportTickets(fetched);
+      },
+      (error) => {
+        console.error('Firestore support_tickets listener error:', error);
+      }
+    );
+    return () => unsubscribe();
+  }, [isAdmin, currentUser?.mobileNumber]);
+
+  // Real-time listener for ANNOUNCEMENTS from Firestore
+  useEffect(() => {
+    const annQuery = collection(db, 'announcements');
+    const unsubscribe = onSnapshot(
+      annQuery,
+      (snapshot) => {
+        const fetched: Announcement[] = [];
+        snapshot.forEach((doc) => {
+          fetched.push({ id: doc.id, ...doc.data() } as Announcement);
+        });
+        fetched.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setAnnouncements(fetched);
+      },
+      (error) => {
+        console.error('Firestore announcements listener error:', error);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  // Periodic background check to automatically publish scheduled announcements & expire outdated announcements
+  useEffect(() => {
+    const checkScheduleAndExpiry = async () => {
+      const now = Date.now();
+      const nowIso = new Date().toISOString();
+
+      for (const ann of announcements) {
+        // Auto-publish scheduled announcement whose time has arrived
+        if (ann.status === 'scheduled' && ann.scheduledAt && new Date(ann.scheduledAt).getTime() <= now) {
+          try {
+            await updateDoc(doc(db, 'announcements', ann.id), {
+              status: 'published',
+              publishedAt: nowIso,
+              updatedAt: nowIso,
+            });
+
+            if (ann.sendPush) {
+              try {
+                pushManager.dispatchLocalNotification({
+                  title: `DIGIZORT: ${ann.title}`,
+                  body: ann.message.slice(0, 100),
+                  tag: `announcement-${ann.id}`,
+                });
+              } catch (pushErr) {
+                console.warn('Scheduled push dispatch error:', pushErr);
+              }
+            }
+          } catch (e) {
+            console.error('Error auto-publishing scheduled announcement:', e);
+          }
+        }
+
+        // Auto-expire published announcement whose expiration time has passed
+        if (ann.status === 'published' && ann.expiresAt && new Date(ann.expiresAt).getTime() <= now) {
+          try {
+            await updateDoc(doc(db, 'announcements', ann.id), {
+              status: 'expired',
+              updatedAt: nowIso,
+            });
+          } catch (e) {
+            console.error('Error auto-expiring announcement:', e);
+          }
+        }
+      }
+    };
+
+    checkScheduleAndExpiry();
+    const interval = setInterval(checkScheduleAndExpiry, 30000);
+    return () => clearInterval(interval);
+  }, [announcements]);
+
   // Filter requests for the current user
   const userRequests = currentUser
     ? allRequests.filter(
@@ -510,6 +679,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const unreadAdminNotificationsCount = adminNotifications.filter((n) => !n.read).length;
   const unreadUserNotificationsCount = userNotifications.filter((n) => !n.read).length;
+
+  // Filter announcements visible to current user (active, non-draft, non-expired, matching audience)
+  const userAnnouncements = currentUser
+    ? announcements.filter((ann) => {
+        if (ann.status === 'draft' || ann.status === 'archived') return false;
+
+        const now = Date.now();
+        // Check scheduling
+        if (ann.status === 'scheduled') {
+          if (!ann.scheduledAt || new Date(ann.scheduledAt).getTime() > now) {
+            return false;
+          }
+        }
+
+        // Check expiration
+        if (ann.status === 'expired') return false;
+        if (ann.expiresAt && new Date(ann.expiresAt).getTime() <= now) {
+          return false;
+        }
+
+        // Check audience targeting
+        if (ann.audienceType === 'everyone') {
+          return true;
+        }
+
+        if (ann.audienceType === 'selected_users' || ann.audienceType === 'specific_user') {
+          return ann.targetUserMobiles?.includes(currentUser.mobileNumber) ?? false;
+        }
+
+        if (ann.audienceType === 'service_users') {
+          if (!ann.targetService) return false;
+          return userRequests.some((r) => r.requestType === ann.targetService);
+        }
+
+        return false;
+      })
+    : [];
+
+  const unreadAnnouncementsCount = userAnnouncements.filter(
+    (ann) => !ann.readByUserMobiles?.includes(currentUser?.mobileNumber || '')
+  ).length;
 
   const markNotificationAsRead = async (notificationId: string) => {
     try {
@@ -705,11 +915,413 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateUserProfile = async (updatedData: Partial<AppUser>) => {
     if (!currentUser) return;
     const cleanNum = currentUser.mobileNumber;
-    // Security: customer cannot elevate role, tamper with balance, or change status/mobile
-    const { role, creditBalance, status, mobileNumber, id, ...allowedUpdates } = updatedData as any;
+    // Security: customer cannot elevate role, tamper with balance, or change status/mobile/id/createdAt
+    const { role, creditBalance, status, mobileNumber, id, createdAt, ...allowedUpdates } = updatedData as any;
+
+    // Sanitize user input strings
+    if (allowedUpdates.nickname !== undefined) {
+      allowedUpdates.nickname = String(allowedUpdates.nickname).replace(/<[^>]*>?/gm, '').trim().slice(0, 50);
+    }
+    if (allowedUpdates.bio !== undefined) {
+      allowedUpdates.bio = String(allowedUpdates.bio).replace(/<[^>]*>?/gm, '').trim().slice(0, 200);
+    }
+    if (allowedUpdates.email !== undefined) {
+      allowedUpdates.email = String(allowedUpdates.email).replace(/<[^>]*>?/gm, '').trim().slice(0, 100);
+    }
+    if (allowedUpdates.address !== undefined) {
+      allowedUpdates.address = String(allowedUpdates.address).replace(/<[^>]*>?/gm, '').trim().slice(0, 200);
+    }
+
     const sanitized = sanitizeForFirestore(allowedUpdates);
     await updateDoc(doc(db, 'app_users', cleanNum), sanitized);
     setCurrentUser((prev) => (prev ? { ...prev, ...sanitized } : null));
+    showToast('Profile updated successfully.');
+  };
+
+  // SUPPORT & FEEDBACK ACTIONS
+  const createSupportTicket = async (params: {
+    type: SupportTicketType;
+    category: string;
+    subject: string;
+    description: string;
+    attachmentUrl?: string;
+    relatedRequestId?: string;
+    technicalContext?: SupportTechnicalContext;
+  }): Promise<SupportTicket> => {
+    if (!currentUser) throw new Error('Must be logged in to submit a support request.');
+
+    const ticketId = 'TKT-' + Math.floor(100000 + Math.random() * 900000);
+    const nowIso = new Date().toISOString();
+
+    const rawTicket: SupportTicket = {
+      id: ticketId,
+      userId: currentUser.id,
+      userMobile: currentUser.mobileNumber,
+      userName: currentUser.fullName,
+      userNickname: currentUser.nickname || '',
+      type: params.type,
+      category: params.category || 'General',
+      subject: params.subject.trim(),
+      description: params.description.trim(),
+      attachmentUrl: params.attachmentUrl || '',
+      relatedRequestId: params.relatedRequestId || '',
+      technicalContext: params.technicalContext || {},
+      status: 'Submitted',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      messages: [
+        {
+          id: 'MSG-' + Date.now(),
+          sender: 'USER',
+          senderName: currentUser.nickname || currentUser.fullName,
+          text: params.description.trim(),
+          timestamp: nowIso,
+          attachmentUrl: params.attachmentUrl || '',
+        },
+      ],
+    };
+
+    const newTicket = sanitizeForFirestore(rawTicket);
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'support_tickets', ticketId), newTicket);
+
+    // Create Notification for Admin
+    const typeLabel =
+      params.type === 'problem'
+        ? 'Problem Report'
+        : params.type === 'suggestion'
+        ? 'New Suggestion'
+        : 'Customer Feedback';
+    const notifId = 'NOTIF-TKT-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', notifId),
+      sanitizeForFirestore({
+        id: notifId,
+        targetUserMobile: 'ADMIN',
+        title: `${typeLabel}: ${params.subject.slice(0, 32)}`,
+        message: `${currentUser.fullName} (${currentUser.mobileNumber}) submitted a ${typeLabel.toLowerCase()}: "${params.subject}"`,
+        type: 'support_ticket',
+        timestamp: nowIso,
+        read: false,
+        userId: currentUser.id,
+        userMobile: currentUser.mobileNumber,
+        userName: currentUser.fullName,
+      })
+    );
+
+    await batch.commit();
+    showToast(`Support Ticket #${ticketId} created successfully.`);
+    return rawTicket;
+  };
+
+  const addSupportTicketMessage = async (params: {
+    ticketId: string;
+    text: string;
+    attachmentUrl?: string;
+  }) => {
+    const ticket = supportTickets.find((t) => t.id === params.ticketId);
+    if (!ticket) throw new Error('Ticket not found.');
+
+    const nowIso = new Date().toISOString();
+    const senderRole: 'USER' | 'ADMIN' = isAdmin ? 'ADMIN' : 'USER';
+    const senderName = isAdmin
+      ? 'DIGIZORT Support'
+      : (currentUser?.nickname || currentUser?.fullName || 'Customer');
+
+    const newMessage: SupportMessage = {
+      id: 'MSG-' + Date.now(),
+      sender: senderRole,
+      senderName,
+      text: params.text.trim(),
+      timestamp: nowIso,
+      attachmentUrl: params.attachmentUrl || '',
+    };
+
+    const updatedMessages = [...(ticket.messages || []), newMessage];
+    const newStatus: SupportTicketStatus = isAdmin ? 'Responded' : 'Under Review';
+
+    const batch = writeBatch(db);
+    batch.update(
+      doc(db, 'support_tickets', params.ticketId),
+      sanitizeForFirestore({
+        messages: updatedMessages,
+        status: newStatus,
+        updatedAt: nowIso,
+      })
+    );
+
+    // If Admin replied, notify the specific customer
+    if (isAdmin) {
+      const notifId = 'NOTIF-SUP-' + Date.now();
+      batch.set(
+        doc(db, 'notifications', notifId),
+        sanitizeForFirestore({
+          id: notifId,
+          targetUserMobile: ticket.userMobile,
+          title: `Support Update: Ticket #${ticket.id}`,
+          message: `DIGIZORT Support responded to your ticket "${ticket.subject.slice(0, 40)}"`,
+          type: 'support_response',
+          timestamp: nowIso,
+          read: false,
+          userId: ticket.userId,
+          userMobile: ticket.userMobile,
+          userName: ticket.userName,
+        })
+      );
+    } else {
+      // Customer replied -> notify Admin
+      const notifId = 'NOTIF-ADMSUP-' + Date.now();
+      batch.set(
+        doc(db, 'notifications', notifId),
+        sanitizeForFirestore({
+          id: notifId,
+          targetUserMobile: 'ADMIN',
+          title: `Reply on Ticket #${ticket.id}`,
+          message: `${senderName} replied on ticket: "${ticket.subject.slice(0, 40)}"`,
+          type: 'support_ticket',
+          timestamp: nowIso,
+          read: false,
+          userId: ticket.userId,
+          userMobile: ticket.userMobile,
+          userName: ticket.userName,
+        })
+      );
+    }
+
+    await batch.commit();
+    showToast('Reply sent successfully.');
+  };
+
+  const adminUpdateSupportTicketStatus = async (params: {
+    ticketId: string;
+    status: SupportTicketStatus;
+    adminNotes?: string;
+  }) => {
+    const ticket = supportTickets.find((t) => t.id === params.ticketId);
+    if (!ticket) throw new Error('Ticket not found.');
+
+    const nowIso = new Date().toISOString();
+    const updatePayload: any = {
+      status: params.status,
+      updatedAt: nowIso,
+    };
+    if (params.adminNotes !== undefined) {
+      updatePayload.adminNotes = params.adminNotes.trim();
+    }
+
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'support_tickets', params.ticketId), sanitizeForFirestore(updatePayload));
+
+    // Notify user if status resolved or closed
+    if (params.status === 'Resolved' || params.status === 'Closed') {
+      const notifId = 'NOTIF-SUP-ST-' + Date.now();
+      batch.set(
+        doc(db, 'notifications', notifId),
+        sanitizeForFirestore({
+          id: notifId,
+          targetUserMobile: ticket.userMobile,
+          title: `Ticket #${ticket.id} Marked ${params.status}`,
+          message: `Your ticket "${ticket.subject.slice(0, 40)}" has been marked as ${params.status.toLowerCase()}.`,
+          type: 'support_response',
+          timestamp: nowIso,
+          read: false,
+          userId: ticket.userId,
+          userMobile: ticket.userMobile,
+          userName: ticket.userName,
+        })
+      );
+    }
+
+    await batch.commit();
+    showToast(`Ticket status updated to ${params.status}.`);
+  };
+
+  // ANNOUNCEMENTS ACTIONS (Official DIGIZORT Broadcasts & Targeted Notices)
+  const createAnnouncement = async (params: {
+    title: string;
+    message: string;
+    type: AnnouncementType;
+    imageUrl?: string;
+    audienceType: AnnouncementAudienceType;
+    targetUserMobiles?: string[];
+    targetUserNames?: string[];
+    targetService?: string;
+    sendPush?: boolean;
+    status: AnnouncementStatus;
+    scheduledAt?: string;
+    expiresAt?: string;
+  }): Promise<Announcement> => {
+    const annId = 'ANN-' + Math.floor(100000 + Math.random() * 900000);
+    const nowIso = new Date().toISOString();
+
+    let targetMobiles = params.targetUserMobiles || [];
+    let targetNames = params.targetUserNames || [];
+    let computedRecipientCount = 0;
+
+    if (params.audienceType === 'everyone') {
+      computedRecipientCount = allUsers.length;
+      targetMobiles = allUsers.map((u) => u.mobileNumber);
+      targetNames = allUsers.map((u) => u.fullName);
+    } else if (params.audienceType === 'service_users') {
+      const matchingMobiles: string[] = Array.from(
+        new Set(
+          allRequests
+            .filter((r) => r.requestType === params.targetService && r.userMobile)
+            .map((r) => r.userMobile)
+        )
+      );
+      targetMobiles = matchingMobiles;
+      targetNames = matchingMobiles.map((mob) => {
+        const u = allUsers.find((user) => user.mobileNumber === mob);
+        return u ? u.fullName : mob;
+      });
+      computedRecipientCount = matchingMobiles.length;
+    } else {
+      computedRecipientCount = targetMobiles.length;
+    }
+
+    const rawAnnouncement: Announcement = {
+      id: annId,
+      title: params.title.trim(),
+      message: params.message.trim(),
+      type: params.type,
+      imageUrl: params.imageUrl || '',
+      audienceType: params.audienceType,
+      targetUserMobiles: targetMobiles,
+      targetUserNames: targetNames,
+      targetService: params.targetService || '',
+      recipientCount: computedRecipientCount,
+      sendPush: !!params.sendPush,
+      status: params.status,
+      scheduledAt: params.scheduledAt || '',
+      expiresAt: params.expiresAt || '',
+      publishedAt: params.status === 'published' ? nowIso : '',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      createdBy: 'DIGIZORT Admin',
+      readByUserMobiles: [],
+    };
+
+    const sanitized = sanitizeForFirestore(rawAnnouncement);
+    await setDoc(doc(db, 'announcements', annId), sanitized);
+
+    if (params.status === 'published' && params.sendPush) {
+      try {
+        pushManager.dispatchLocalNotification({
+          title: `DIGIZORT: ${rawAnnouncement.title}`,
+          body: rawAnnouncement.message.slice(0, 100),
+          tag: `announcement-${annId}`,
+        });
+      } catch (err) {
+        console.warn('Push dispatch error:', err);
+      }
+    }
+
+    const actionText =
+      rawAnnouncement.status === 'published'
+        ? 'published'
+        : rawAnnouncement.status === 'scheduled'
+        ? 'scheduled'
+        : 'saved as draft';
+    showToast(`Announcement ${actionText} successfully.`);
+    return rawAnnouncement;
+  };
+
+  const updateAnnouncementDraft = async (
+    announcementId: string,
+    params: Partial<Announcement>
+  ) => {
+    const nowIso = new Date().toISOString();
+    const sanitized = sanitizeForFirestore({
+      ...params,
+      updatedAt: nowIso,
+    });
+    await updateDoc(doc(db, 'announcements', announcementId), sanitized);
+    showToast('Announcement draft updated.');
+  };
+
+  const publishAnnouncementNow = async (announcementId: string) => {
+    const target = announcements.find((a) => a.id === announcementId);
+    const nowIso = new Date().toISOString();
+    await updateDoc(doc(db, 'announcements', announcementId), {
+      status: 'published',
+      publishedAt: nowIso,
+      updatedAt: nowIso,
+    });
+
+    if (target?.sendPush) {
+      try {
+        pushManager.dispatchLocalNotification({
+          title: `DIGIZORT: ${target.title}`,
+          body: target.message.slice(0, 100),
+          tag: `announcement-${target.id}`,
+        });
+      } catch (err) {
+        console.warn('Push dispatch error:', err);
+      }
+    }
+    showToast('Announcement published successfully.');
+  };
+
+  const scheduleAnnouncement = async (announcementId: string, scheduledAt: string) => {
+    const nowIso = new Date().toISOString();
+    await updateDoc(doc(db, 'announcements', announcementId), {
+      status: 'scheduled',
+      scheduledAt,
+      updatedAt: nowIso,
+    });
+    showToast('Announcement scheduled successfully.');
+  };
+
+  const cancelScheduledAnnouncement = async (announcementId: string) => {
+    const nowIso = new Date().toISOString();
+    await updateDoc(doc(db, 'announcements', announcementId), {
+      status: 'draft',
+      updatedAt: nowIso,
+    });
+    showToast('Announcement unscheduled and moved to Drafts.');
+  };
+
+  const archiveAnnouncement = async (announcementId: string) => {
+    const nowIso = new Date().toISOString();
+    await updateDoc(doc(db, 'announcements', announcementId), {
+      status: 'archived',
+      updatedAt: nowIso,
+    });
+    showToast('Announcement archived.');
+  };
+
+  const markAnnouncementAsRead = async (announcementId: string) => {
+    if (!currentUser) return;
+    try {
+      await updateDoc(doc(db, 'announcements', announcementId), {
+        readByUserMobiles: arrayUnion(currentUser.mobileNumber),
+      });
+    } catch (err) {
+      console.error('Failed to mark announcement as read:', err);
+    }
+  };
+
+  const markAllAnnouncementsAsRead = async () => {
+    if (!currentUser || userAnnouncements.length === 0) return;
+    try {
+      const batch = writeBatch(db);
+      let count = 0;
+      userAnnouncements.forEach((ann) => {
+        if (!ann.readByUserMobiles?.includes(currentUser.mobileNumber)) {
+          batch.update(doc(db, 'announcements', ann.id), {
+            readByUserMobiles: arrayUnion(currentUser.mobileNumber),
+          });
+          count++;
+        }
+      });
+      if (count > 0) {
+        await batch.commit();
+        showToast('All announcements marked as read.');
+      }
+    } catch (err) {
+      console.error('Failed to mark all announcements as read:', err);
+    }
   };
 
   // USER ACTIONS: Create Request
@@ -3361,6 +3973,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         groupPayments,
         balanceTransactions,
         balanceRequests,
+        supportTickets,
+        announcements,
+        userAnnouncements,
+        unreadAnnouncementsCount,
         settings,
         checkMobileRegistered,
         registerUser,
@@ -3372,6 +3988,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userCancelRequest,
         userEditRequest,
         updateUserProfile,
+        createSupportTicket,
+        addSupportTicketMessage,
+        adminUpdateSupportTicketStatus,
+        createAnnouncement,
+        updateAnnouncementDraft,
+        publishAnnouncementNow,
+        scheduleAnnouncement,
+        cancelScheduledAnnouncement,
+        archiveAnnouncement,
+        markAnnouncementAsRead,
+        markAllAnnouncementsAsRead,
         getUserBalanceInfo,
         userSubmitBalanceRequest,
         userCancelBalanceRequest,

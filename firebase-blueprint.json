@@ -135,6 +135,51 @@
         "processedBy": { "type": "string" },
         "payoutMethod": { "type": "string" }
       }
+    },
+    "supportTickets": {
+      "path": "support_tickets/{ticketId}",
+      "fields": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userMobile": { "type": "string" },
+        "userName": { "type": "string" },
+        "userNickname": { "type": "string" },
+        "type": { "type": "string" },
+        "category": { "type": "string" },
+        "subject": { "type": "string" },
+        "description": { "type": "string" },
+        "attachmentUrl": { "type": "string" },
+        "relatedRequestId": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "messages": { "type": "array" },
+        "adminNotes": { "type": "string" }
+      }
+    },
+    "announcements": {
+      "path": "announcements/{announcementId}",
+      "fields": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "audienceType": { "type": "string" },
+        "targetUserMobiles": { "type": "array" },
+        "targetUserNames": { "type": "array" },
+        "targetService": { "type": "string" },
+        "recipientCount": { "type": "number" },
+        "sendPush": { "type": "boolean" },
+        "status": { "type": "string" },
+        "scheduledAt": { "type": "string" },
+        "expiresAt": { "type": "string" },
+        "publishedAt": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "readByUserMobiles": { "type": "array" }
+      }
     }
   }
 }

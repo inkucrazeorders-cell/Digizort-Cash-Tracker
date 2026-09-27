@@ -27,6 +27,8 @@ import { PaidAmountModal } from './PaidAmountModal';
 import { PayUserBalanceModal } from './PayUserBalanceModal';
 import { AdminOfferModal } from './AdminOfferModal';
 import { AdminBalanceActionModal } from './AdminBalanceActionModal';
+import { AdminSupportDeskView } from './AdminSupportDeskView';
+import { AdminAnnouncementsView } from './AdminAnnouncementsView';
 import { pushManager, NotificationPermissionState } from '../lib/pushNotifications';
 import {
   ShieldCheck,
@@ -62,6 +64,8 @@ import {
   Eye,
   Bell,
   UserPlus,
+  HelpCircle,
+  Megaphone,
 } from 'lucide-react';
 
 export const AdminPanel: React.FC = () => {
@@ -71,6 +75,8 @@ export const AdminPanel: React.FC = () => {
     groupPayments,
     balanceRequests,
     balanceTransactions,
+    supportTickets,
+    announcements,
     adminNotifications,
     unreadAdminNotificationsCount,
     markNotificationAsRead,
@@ -88,7 +94,15 @@ export const AdminPanel: React.FC = () => {
   } = useApp();
 
   const [adminTab, setAdminTab] = useState<
-    'dashboard' | 'requests' | 'group_payment' | 'balance_requests' | 'rejected' | 'users' | 'reports'
+    | 'dashboard'
+    | 'requests'
+    | 'group_payment'
+    | 'balance_requests'
+    | 'rejected'
+    | 'users'
+    | 'announcements'
+    | 'support'
+    | 'reports'
   >('dashboard');
 
   const [pushPermission, setPushPermission] = useState<NotificationPermissionState>(pushManager.getPermission());
@@ -576,6 +590,42 @@ export const AdminPanel: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setAdminTab('support')}
+            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
+              adminTab === 'support'
+                ? 'bg-rose-600 text-white shadow-md'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+            }`}
+            id="admin-tab-support"
+          >
+            <HelpCircle className="w-4 h-4 text-amber-400" />
+            <span>Support &amp; Help Desk ({supportTickets.length})</span>
+            {supportTickets.filter((t) => t.status === 'Submitted' || t.status === 'Under Review').length > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-rose-500 text-white font-extrabold text-[10px] animate-pulse">
+                {supportTickets.filter((t) => t.status === 'Submitted' || t.status === 'Under Review').length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setAdminTab('announcements')}
+            className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
+              adminTab === 'announcements'
+                ? 'bg-rose-600 text-white shadow-md'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+            }`}
+            id="admin-tab-announcements"
+          >
+            <Megaphone className="w-4 h-4 text-rose-400" />
+            <span>Announcements ({announcements.length})</span>
+            {announcements.filter((a) => a.status === 'scheduled').length > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-blue-500 text-white font-extrabold text-[10px]">
+                {announcements.filter((a) => a.status === 'scheduled').length}
+              </span>
+            )}
+          </button>
+
+          <button
             onClick={() => setAdminTab('reports')}
             className={`py-2.5 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
               adminTab === 'reports'
@@ -878,6 +928,68 @@ export const AdminPanel: React.FC = () => {
                       {settings.currencySymbol}{(statsSummary.totalExtraCashReturned || 0).toLocaleString('en-IN')}
                     </span>
                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* DIGIZORT Announcements Quick Overview */}
+            <div className="p-6 rounded-3xl bg-gradient-to-br from-zinc-900 to-zinc-950 border border-zinc-800 space-y-4 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                    <Megaphone className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                      Official Announcements &amp; Broadcasts
+                    </h4>
+                    <p className="text-[11px] text-zinc-400">
+                      Targeted notices, scheduled maintenance windows, system updates, and reward announcements.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setAdminTab('announcements')}
+                    className="py-1.5 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold transition-colors flex items-center gap-1.5"
+                  >
+                    <span>Manage All</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setAdminTab('announcements')}
+                    className="py-1.5 px-3 rounded-xl bg-[#E53935] hover:brightness-110 text-white text-xs font-extrabold shadow-md flex items-center gap-1.5 transition-all"
+                  >
+                    <PlusCircle className="w-3.5 h-3.5" />
+                    <span>New Announcement</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-850">
+                  <span className="text-[10px] text-zinc-400 font-bold uppercase block mb-1">Published</span>
+                  <span className="text-xl font-black text-emerald-400">
+                    {announcements.filter((a) => a.status === 'published').length}
+                  </span>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-850">
+                  <span className="text-[10px] text-zinc-400 font-bold uppercase block mb-1">Scheduled</span>
+                  <span className="text-xl font-black text-blue-400">
+                    {announcements.filter((a) => a.status === 'scheduled').length}
+                  </span>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-850">
+                  <span className="text-[10px] text-zinc-400 font-bold uppercase block mb-1">Drafts</span>
+                  <span className="text-xl font-black text-amber-400">
+                    {announcements.filter((a) => a.status === 'draft').length}
+                  </span>
+                </div>
+                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-850">
+                  <span className="text-[10px] text-zinc-400 font-bold uppercase block mb-1">Expired / Archived</span>
+                  <span className="text-xl font-black text-zinc-400">
+                    {announcements.filter((a) => a.status === 'expired' || a.status === 'archived').length}
+                  </span>
                 </div>
               </div>
             </div>
@@ -1926,11 +2038,26 @@ export const AdminPanel: React.FC = () => {
                       <div className="space-y-3">
                         <div className="flex items-start justify-between">
                           <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-rose-600 to-[#B71C1C] text-white font-extrabold flex items-center justify-center text-base">
-                              {usr.fullName.charAt(0).toUpperCase()}
-                            </div>
+                            {usr.profilePhoto ? (
+                              <img
+                                src={usr.profilePhoto}
+                                alt={usr.fullName}
+                                className="w-10 h-10 rounded-2xl object-cover border border-zinc-700 bg-zinc-950"
+                              />
+                            ) : (
+                              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-rose-600 to-[#B71C1C] text-white font-extrabold flex items-center justify-center text-base">
+                                {usr.fullName.charAt(0).toUpperCase()}
+                              </div>
+                            )}
                             <div>
-                              <h4 className="text-sm font-extrabold text-white">{usr.fullName}</h4>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <h4 className="text-sm font-extrabold text-white">{usr.fullName}</h4>
+                                {usr.nickname && (
+                                  <span className="text-[10px] text-rose-300 font-bold bg-rose-500/15 px-1.5 py-0.2 rounded-md">
+                                    {usr.nickname}
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-xs text-rose-400 font-bold">{usr.mobileNumber}</p>
                             </div>
                           </div>
@@ -2161,6 +2288,12 @@ export const AdminPanel: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* TAB 8: SUPPORT & HELP DESK */}
+        {adminTab === 'support' && <AdminSupportDeskView />}
+
+        {/* TAB 9: ANNOUNCEMENTS */}
+        {adminTab === 'announcements' && <AdminAnnouncementsView />}
       </main>
 
       {/* Admin Action Modal */}
@@ -2237,15 +2370,33 @@ export const AdminPanel: React.FC = () => {
 
               {/* User Header */}
               <div className="flex items-center justify-between flex-wrap gap-4 border-b border-zinc-800 pb-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-rose-600 to-[#B71C1C] text-white font-extrabold text-xl flex items-center justify-center">
-                    {selectedUserDetail.fullName.charAt(0).toUpperCase()}
-                  </div>
+                <div className="flex items-center gap-3.5">
+                  {selectedUserDetail.profilePhoto ? (
+                    <img
+                      src={selectedUserDetail.profilePhoto}
+                      alt={selectedUserDetail.fullName}
+                      className="w-12 h-12 rounded-2xl object-cover border border-zinc-700 bg-zinc-950 shadow"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-rose-600 to-[#B71C1C] text-white font-extrabold text-xl flex items-center justify-center">
+                      {selectedUserDetail.fullName.charAt(0).toUpperCase()}
+                    </div>
+                  )}
                   <div>
-                    <h3 className="text-lg font-extrabold text-white">{selectedUserDetail.fullName}</h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-extrabold text-white">{selectedUserDetail.fullName}</h3>
+                      {selectedUserDetail.nickname && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                          {selectedUserDetail.nickname}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-rose-400 font-bold">{selectedUserDetail.mobileNumber}</p>
                     {selectedUserDetail.email && (
                       <p className="text-[11px] text-zinc-400">{selectedUserDetail.email}</p>
+                    )}
+                    {selectedUserDetail.bio && (
+                      <p className="text-[11px] text-zinc-300 italic pt-0.5">"{selectedUserDetail.bio}"</p>
                     )}
                   </div>
                 </div>

@@ -45,12 +45,16 @@ import {
   ArrowDownToLine,
   TrendingDown,
   Ban,
+  ArrowRight,
 } from 'lucide-react';
 import { BalanceLedgerView } from './BalanceLedgerView';
 import { RequestMoneyModal } from './RequestMoneyModal';
 import { UserBalanceRequestsList } from './UserBalanceRequestsList';
 import { PayWithBalanceModal } from './PayWithBalanceModal';
-import { Wallet } from 'lucide-react';
+import { Wallet, HelpCircle, Megaphone } from 'lucide-react';
+import { UserProfileView } from './UserProfileView';
+import { HelpSupportView } from './HelpSupportView';
+import { UserAnnouncementsView } from './UserAnnouncementsView';
 
 export const UserPortal: React.FC = () => {
   const {
@@ -61,6 +65,9 @@ export const UserPortal: React.FC = () => {
     markNotificationAsRead,
     markAllNotificationsAsRead,
     balanceTransactions,
+    supportTickets,
+    userAnnouncements,
+    unreadAnnouncementsCount,
     settings,
     logoutUser,
     updateUserProfile,
@@ -70,7 +77,7 @@ export const UserPortal: React.FC = () => {
     showToast,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'requests' | 'timeline' | 'documents' | 'notifications' | 'profile' | 'balance' | 'rejected'>('requests');
+  const [activeTab, setActiveTab] = useState<'requests' | 'timeline' | 'documents' | 'notifications' | 'announcements' | 'profile' | 'balance' | 'rejected' | 'support'>('requests');
   const [isNewRequestOpen, setIsNewRequestOpen] = useState(false);
   const [newRequestInitialUseBalance, setNewRequestInitialUseBalance] = useState(false);
   const [payWithBalanceReq, setPayWithBalanceReq] = useState<OrderRequest | null>(null);
@@ -101,12 +108,6 @@ export const UserPortal: React.FC = () => {
   const [isPushBannerDismissed, setIsPushBannerDismissed] = useState(() => {
     return localStorage.getItem('digizort_push_banner_dismissed') === 'true';
   });
-
-  // Profile Edit State
-  const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [editName, setEditName] = useState(currentUser?.fullName || '');
-  const [editEmail, setEditEmail] = useState(currentUser?.email || '');
-  const [editAddress, setEditAddress] = useState(currentUser?.address || '');
 
   if (!currentUser) return null;
 
@@ -161,22 +162,6 @@ export const UserPortal: React.FC = () => {
   const totalPendingBalance = userSummary.totalPending;
   const totalPaidSoFar = userSummary.totalPaid;
   const totalExtraCash = userSummary.totalExtraCash;
-
-  const handleSaveProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editName.trim()) return;
-    try {
-      await updateUserProfile({
-        fullName: editName.trim(),
-        email: editEmail.trim() || undefined,
-        address: editAddress.trim() || undefined,
-      });
-      setIsEditingProfile(false);
-      showToast('Profile updated successfully!');
-    } catch (err) {
-      console.error(err);
-    }
-  };
 
   const getStatusBadge = (status: RequestStatus) => {
     switch (status) {
@@ -324,7 +309,7 @@ export const UserPortal: React.FC = () => {
                 CUSTOMER DASHBOARD
               </span>
               <h2 className="text-2xl font-extrabold text-white tracking-tight">
-                Welcome, {currentUser.fullName}
+                Welcome, {currentUser.nickname || currentUser.fullName}
               </h2>
               <p className="text-xs text-zinc-400 mt-0.5">
                 Manage your active service requests, live payment status, and official confirmation records.
@@ -468,6 +453,46 @@ export const UserPortal: React.FC = () => {
           </div>
         </div>
 
+        {/* Highlight Banner for Latest Unread Announcement */}
+        {(() => {
+          const latestUnreadAnn = userAnnouncements.find(
+            (a) => !a.readByUserMobiles?.includes(currentUser.mobileNumber)
+          );
+          if (!latestUnreadAnn) return null;
+          return (
+            <div className="p-4 rounded-3xl bg-gradient-to-r from-rose-950/40 via-zinc-900 to-zinc-950 border border-rose-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xl">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-[#E53935] to-[#B71C1C] text-white flex items-center justify-center shrink-0 shadow-lg shadow-rose-950/50">
+                  <Megaphone className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-rose-400">
+                      Official Announcement
+                    </span>
+                    <span className="px-1.5 py-0.2 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[9px] font-bold">
+                      {latestUnreadAnn.type}
+                    </span>
+                  </div>
+                  <h4 className="text-sm font-extrabold text-white mt-0.5">
+                    {latestUnreadAnn.title}
+                  </h4>
+                  <p className="text-xs text-zinc-300 line-clamp-1 max-w-xl">
+                    {latestUnreadAnn.message}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setActiveTab('announcements')}
+                className="py-2 px-4 rounded-xl bg-[#E53935] hover:brightness-110 text-white font-extrabold text-xs shadow-md shadow-rose-950/40 transition-all shrink-0 self-start sm:self-auto flex items-center gap-1.5"
+              >
+                <span>Read Announcement</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          );
+        })()}
+
         {/* Tab Navigation Controls */}
         <div className="flex items-center gap-1.5 p-1.5 rounded-2xl bg-zinc-900 border border-zinc-800 overflow-x-auto">
           <button
@@ -554,6 +579,24 @@ export const UserPortal: React.FC = () => {
           )}
 
           <button
+            onClick={() => setActiveTab('announcements')}
+            className={`py-2 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
+              activeTab === 'announcements'
+                ? 'bg-[#E53935] text-white shadow-md'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+            }`}
+            id="user-tab-announcements"
+          >
+            <Megaphone className="w-4 h-4 text-rose-400" />
+            <span>Announcements</span>
+            {unreadAnnouncementsCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-rose-500 text-white font-extrabold text-[10px] animate-pulse">
+                {unreadAnnouncementsCount}
+              </span>
+            )}
+          </button>
+
+          <button
             onClick={() => setActiveTab('profile')}
             className={`py-2 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
               activeTab === 'profile'
@@ -564,6 +607,22 @@ export const UserPortal: React.FC = () => {
           >
             <User className="w-4 h-4" />
             <span>My Profile</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('support')}
+            className={`py-2 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
+              activeTab === 'support'
+                ? 'bg-[#E53935] text-white shadow-md'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+            }`}
+            id="user-tab-support"
+          >
+            <HelpCircle className="w-4 h-4 text-amber-400" />
+            <span>Help &amp; Support</span>
+            {supportTickets.filter((t) => t.status === 'Responded').length > 0 && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            )}
           </button>
         </div>
 
@@ -1240,105 +1299,13 @@ export const UserPortal: React.FC = () => {
         })()}
 
         {/* TAB 5: PROFILE */}
-        {activeTab === 'profile' && (
-          <div className="p-6 rounded-3xl bg-zinc-900/80 border border-zinc-800/90 space-y-6 max-w-xl mx-auto">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-              <div className="flex items-center gap-3">
-                <div className="p-3 rounded-2xl bg-gradient-to-tr from-[#E53935] to-[#B71C1C] text-white font-extrabold text-xl">
-                  {currentUser.fullName.charAt(0).toUpperCase()}
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white">{currentUser.fullName}</h3>
-                  <p className="text-xs text-zinc-400">{currentUser.mobileNumber}</p>
-                </div>
-              </div>
+        {activeTab === 'profile' && <UserProfileView />}
 
-              {!isEditingProfile && (
-                <button
-                  onClick={() => setIsEditingProfile(true)}
-                  className="py-2 px-3.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold rounded-xl"
-                >
-                  Edit Profile
-                </button>
-              )}
-            </div>
+        {/* TAB 6: HELP & SUPPORT */}
+        {activeTab === 'support' && <HelpSupportView />}
 
-            {isEditingProfile ? (
-              <form onSubmit={handleSaveProfile} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-zinc-300 mb-1">Full Name</label>
-                  <input
-                    type="text"
-                    required
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-[#E53935]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-zinc-300 mb-1">Email</label>
-                  <input
-                    type="email"
-                    value={editEmail}
-                    onChange={(e) => setEditEmail(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-[#E53935]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-zinc-300 mb-1">Address</label>
-                  <input
-                    type="text"
-                    value={editAddress}
-                    onChange={(e) => setEditAddress(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-[#E53935]"
-                  />
-                </div>
-
-                <div className="flex items-center justify-end gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsEditingProfile(false)}
-                    className="py-2 px-3.5 bg-zinc-800 text-zinc-300 text-xs font-bold rounded-xl"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="py-2 px-4 bg-[#E53935] hover:brightness-110 text-white text-xs font-bold rounded-xl shadow-md"
-                  >
-                    Save Changes
-                  </button>
-                </div>
-              </form>
-            ) : (
-              <div className="space-y-3 text-xs">
-                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 flex items-center justify-between">
-                  <span className="text-zinc-500 font-bold">Registered Mobile</span>
-                  <span className="font-extrabold text-white">{currentUser.mobileNumber}</span>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 flex items-center justify-between">
-                  <span className="text-zinc-500 font-bold">Email Address</span>
-                  <span className="font-semibold text-zinc-300">{currentUser.email || 'Not Provided'}</span>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 flex items-center justify-between">
-                  <span className="text-zinc-500 font-bold">Address</span>
-                  <span className="font-semibold text-zinc-300">{currentUser.address || 'Not Provided'}</span>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 flex items-center justify-between">
-                  <span className="text-zinc-500 font-bold">Account Registration Date</span>
-                  <span className="font-semibold text-zinc-300">
-                    {new Date(currentUser.createdAt).toLocaleDateString('en-IN')}
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+        {/* TAB 7: ANNOUNCEMENTS */}
+        {activeTab === 'announcements' && <UserAnnouncementsView />}
 
         {/* TAB 7: REJECTED ORDERS (COMPLETE SEPARATION) */}
         {activeTab === 'rejected' && (

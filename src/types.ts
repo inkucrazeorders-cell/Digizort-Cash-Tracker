@@ -244,6 +244,8 @@ export interface AppUser {
   id: string;
   mobileNumber: string;
   fullName: string;
+  nickname?: string;
+  bio?: string;
   email?: string;
   address?: string;
   profilePhoto?: string;
@@ -253,6 +255,102 @@ export interface AppUser {
   lastLoginAt?: string;
   pin?: string;
   creditBalance?: number;
+  preferredLanguage?: string;
+  notificationPreferences?: {
+    push: boolean;
+    whatsapp: boolean;
+    email: boolean;
+  };
+}
+
+export type SupportTicketType = 'feedback' | 'suggestion' | 'problem';
+
+export type SupportTicketStatus =
+  | 'Submitted'
+  | 'Under Review'
+  | 'Responded'
+  | 'Resolved'
+  | 'Closed';
+
+export interface SupportMessage {
+  id: string;
+  sender: 'USER' | 'ADMIN';
+  senderName: string;
+  text: string;
+  timestamp: string;
+  attachmentUrl?: string;
+}
+
+export interface SupportTechnicalContext {
+  browser?: string;
+  os?: string;
+  device?: string;
+  screen?: string;
+  currentSection?: string;
+}
+
+export interface SupportTicket {
+  id: string;
+  userId: string;
+  userMobile: string;
+  userName: string;
+  userNickname?: string;
+  type: SupportTicketType;
+  category: string;
+  subject: string;
+  description: string;
+  attachmentUrl?: string;
+  relatedRequestId?: string;
+  technicalContext?: SupportTechnicalContext;
+  status: SupportTicketStatus;
+  createdAt: string;
+  updatedAt: string;
+  messages: SupportMessage[];
+  adminNotes?: string;
+}
+
+export type AnnouncementType =
+  | 'General Update'
+  | 'Maintenance'
+  | 'New Feature'
+  | 'Event'
+  | 'Reward'
+  | 'Important Notice'
+  | 'Service Update';
+
+export type AnnouncementAudienceType =
+  | 'everyone'
+  | 'selected_users'
+  | 'specific_user'
+  | 'service_users';
+
+export type AnnouncementStatus =
+  | 'draft'
+  | 'scheduled'
+  | 'published'
+  | 'expired'
+  | 'archived';
+
+export interface Announcement {
+  id: string;
+  title: string;
+  message: string;
+  type: AnnouncementType;
+  imageUrl?: string;
+  audienceType: AnnouncementAudienceType;
+  targetUserMobiles: string[]; // Mobile numbers of targeted users
+  targetUserNames?: string[]; // Optional user names for display in Admin
+  targetService?: RequestType | string; // Real service category
+  recipientCount: number; // Computed number of targeted recipients
+  sendPush: boolean; // Whether push notification was triggered
+  status: AnnouncementStatus;
+  scheduledAt?: string; // Optional schedule date/time ISO
+  expiresAt?: string; // Optional expiration date/time ISO
+  publishedAt?: string; // Published date/time ISO
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string; // 'DIGIZORT Admin'
+  readByUserMobiles: string[]; // List of user mobile numbers who have read this announcement
 }
 
 export type NotificationType =
@@ -263,6 +361,8 @@ export type NotificationType =
   | 'balance_request'
   | 'balance_added'
   | 'new_user'
+  | 'support_ticket'
+  | 'support_response'
   | 'request_cancelled'
   | 'special_offer'
   | 'info';
