@@ -2,11 +2,12 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../context/AppContext';
 import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
-import { OrderRequest, RequestStatus, AppUser, GroupPayment } from '../types';
+import { OrderRequest, RequestStatus, AppUser, GroupPayment, BalanceTransaction } from '../types';
 import {
   calculateAccountSummary,
   isRequestRejected,
   isRequestCancelled,
+  isRequestActive,
   isRequestEligibleForPayment,
   getRequestPrice,
   getOriginalPrice,
@@ -15,6 +16,7 @@ import {
   getRequestRemaining,
   getRequestPendingExtraCash,
   allocatePaymentAcrossRequests,
+  calculateUserBalanceBreakdown,
 } from '../lib/calculations';
 import { AdminActionModal } from './AdminActionModal';
 import { DigitalDocumentCard } from './DigitalDocumentCard';
@@ -24,6 +26,7 @@ import { AdminBalanceRequestsView } from './AdminBalanceRequestsView';
 import { PaidAmountModal } from './PaidAmountModal';
 import { PayUserBalanceModal } from './PayUserBalanceModal';
 import { AdminOfferModal } from './AdminOfferModal';
+import { AdminBalanceActionModal } from './AdminBalanceActionModal';
 import { pushManager, NotificationPermissionState } from '../lib/pushNotifications';
 import {
   ShieldCheck,
@@ -73,6 +76,7 @@ export const AdminPanel: React.FC = () => {
     markNotificationAsRead,
     markAllNotificationsAsRead,
     adminAddBalanceAdjustment,
+    adminDebitUserBalance,
     settings,
     logoutUser,
     adminSuspendUser,
@@ -94,6 +98,16 @@ export const AdminPanel: React.FC = () => {
   // Admin Notification Bell Dropdown State
   const [showAdminNotifs, setShowAdminNotifs] = useState(false);
 
+  // Dedicated Customer Balance Management Action Modal State (inside Manage Customers)
+  const [customerBalActionUser, setCustomerBalActionUser] = useState<AppUser | null>(null);
+  const [customerBalActionMode, setCustomerBalActionMode] = useState<'add' | 'correction' | 'debit'>('add');
+  const [customerBalAmount, setCustomerBalAmount] = useState('');
+  const [customerBalReason, setCustomerBalReason] = useState('Reward');
+  const [customerBalCustomReason, setCustomerBalCustomReason] = useState('');
+  const [customerBalNotes, setCustomerBalNotes] = useState('');
+  const [customerBalCorrectionDir, setCustomerBalCorrectionDir] = useState<'credit' | 'debit'>('credit');
+  const [isSubmittingCustomerBal, setIsSubmittingCustomerBal] = useState(false);
+
   // Admin Add Balance Modal State
   const [addBalanceModalUser, setAddBalanceModalUser] = useState<AppUser | null>(null);
   const [addBalanceAmount, setAddBalanceAmount] = useState('');
@@ -106,6 +120,10 @@ export const AdminPanel: React.FC = () => {
   const [balanceModalUser, setBalanceModalUser] = useState<AppUser | null>(null);
   const [balanceModalMode, setBalanceModalMode] = useState<'pay' | 'use' | null>(null);
   const [balanceModalPreselectedReqId, setBalanceModalPreselectedReqId] = useState<string | undefined>(undefined);
+
+  // Admin-granted Balance Management State (Reverse / Edit / Cancel)
+  const [balanceActionTx, setBalanceActionTx] = useState<BalanceTransaction | null>(null);
+  const [balanceActionMode, setBalanceActionMode] = useState<'reverse' | 'edit' | 'cancel' | null>(null);
 
   // Action Modal State
   const [selectedReq, setSelectedReq] = useState<OrderRequest | null>(null);
@@ -152,12 +170,13 @@ export const AdminPanel: React.FC = () => {
   const [userSearch, setUserSearch] = useState('');
   const [userStatusFilter, setUserStatusFilter] = useState<'All' | 'active' | 'suspended'>('All');
 
-  // Selected User detail modal
+  // Selected User detail modal and dedicated section ('balance' | 'requests')
   const [selectedUserDetail, setSelectedUserDetail] = useState<AppUser | null>(null);
+  const [userDetailSection, setUserDetailSection] = useState<'balance' | 'requests'>('balance');
 
-  // Active (non-rejected) vs Rejected requests
-  const activeRequests = allRequests.filter((r) => !isRequestRejected(r));
-  const rejectedRequests = allRequests.filter((r) => isRequestRejected(r));
+  // Canonical definition of genuinely active requests vs rejected requests
+  const activeRequests = allRequests.filter(isRequestActive);
+  const rejectedRequests = allRequests.filter(isRequestRejected);
 
   // Stats calculation via calculations.ts (strictly separates rejected requests and accounts for balance transactions)
   const statsSummary = calculateAccountSummary(allRequests, groupPayments, balanceTransactions);
@@ -191,11 +210,8 @@ export const AdminPanel: React.FC = () => {
     .reduce((sum, r) => sum + getRequestPaid(r), 0);
 
   // Filtered Active Requests (strictly separates rejected requests)
-  const filteredRequests = allRequests.filter((r) => {
-    // If status filter is 'All', strictly exclude rejected requests
-    if (reqStatusFilter === 'All') {
-      if (isRequestRejected(r)) return false;
-    } else if (r.status !== reqStatusFilter) {
+  const filteredRequests = activeRequests.filter((r) => {
+    if (reqStatusFilter !== 'All' && r.status !== reqStatusFilter) {
       return false;
     }
 
@@ -771,7 +787,7 @@ export const AdminPanel: React.FC = () => {
                   <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
                     <span className="text-zinc-400">Pending Review:</span>
                     <span className="font-extrabold text-blue-400">
-                      {allRequests.filter((r) => r.status === 'Pending Review').length}
+                      {activeRequests.filter((r) => r.status === 'Pending Review').length}
                     </span>
                   </div>
                   <div className="flex justify-between items-center py-1 border-b border-zinc-800/60">
@@ -872,13 +888,13 @@ export const AdminPanel: React.FC = () => {
                 Recent Order Requests & System Activity
               </h3>
 
-              {allRequests.length === 0 ? (
+              {activeRequests.length === 0 ? (
                 <div className="p-8 text-center text-zinc-500 text-xs">
-                  No requests registered in the database yet.
+                  No active requests registered in the database yet.
                 </div>
               ) : (
                 <div className="space-y-2.5">
-                  {allRequests.slice(0, 5).map((req) => (
+                  {activeRequests.slice(0, 5).map((req) => (
                     <div
                       key={req.id}
                       className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800/80 flex items-center justify-between text-xs"
@@ -928,10 +944,16 @@ export const AdminPanel: React.FC = () => {
 
               <select
                 value={reqStatusFilter}
-                onChange={(e) => setReqStatusFilter(e.target.value)}
+                onChange={(e) => {
+                  if (e.target.value === 'Rejected') {
+                    setAdminTab('rejected');
+                  } else {
+                    setReqStatusFilter(e.target.value);
+                  }
+                }}
                 className="px-3.5 py-2 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-300 focus:outline-none focus:border-rose-500"
               >
-                <option value="All">All Statuses</option>
+                <option value="All">All Active Statuses</option>
                 <option value="Pending Review">Pending Review</option>
                 <option value="Accepted">Accepted</option>
                 <option value="Processing">Processing</option>
@@ -939,8 +961,8 @@ export const AdminPanel: React.FC = () => {
                 <option value="Waiting For Payment">Waiting For Payment</option>
                 <option value="Partially Paid">Partially Paid</option>
                 <option value="Paid">Paid</option>
-                <option value="Rejected">Rejected</option>
                 <option value="Cancelled">Cancelled</option>
+                <option value="Rejected">Go to Rejected Requests →</option>
               </select>
             </div>
 
@@ -1063,14 +1085,6 @@ export const AdminPanel: React.FC = () => {
                                   <span className="text-rose-400 font-bold block">
                                     Balance: {settings.currencySymbol}{rem.toLocaleString('en-IN')}
                                   </span>
-                                ) : hasBalToReturn ? (
-                                  <span className="text-amber-400 font-bold text-[11px] block">
-                                    Paid — {settings.currencySymbol}{reqAvailableBal.toLocaleString('en-IN')} Return Due
-                                  </span>
-                                ) : isBalCleared ? (
-                                  <span className="text-emerald-400 text-[10px] font-bold block">
-                                    Paid (Balance Cleared)
-                                  </span>
                                 ) : (
                                   <span className="text-emerald-400 text-[10px] font-bold block">
                                     Fully Settled
@@ -1134,46 +1148,14 @@ export const AdminPanel: React.FC = () => {
                                     onClick={() => setPaidModalTarget({ type: 'request', request: req })}
                                     className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-md shadow-emerald-600/20 transition-all flex items-center gap-1.5 active:scale-[0.98]"
                                     id={`btn-paid-request-${req.id}`}
-                                    title={`Enter Amount Received for ${settings.currencySymbol}{rem.toLocaleString('en-IN')}`}
+                                    title={`Enter Amount Received for ${settings.currencySymbol}${rem.toLocaleString('en-IN')}`}
                                   >
                                     <DollarSign className="w-3.5 h-3.5" />
                                     <span>Paid</span>
                                   </button>
                                 )}
 
-                                {/* 2. PAY USER BALANCE BUTTON */}
-                                {hasBalToReturn && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setPayUserBalanceData({
-                                        customer: {
-                                          userId: req.userId,
-                                          userMobile: req.userMobile,
-                                          userName: req.userName,
-                                        },
-                                        currentBalance: reqAvailableBal,
-                                        relatedRequestId: req.id,
-                                      })
-                                    }
-                                    className="py-2 px-3.5 bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-xs rounded-xl shadow-md shadow-amber-600/20 transition-all flex items-center gap-1.5 active:scale-[0.98]"
-                                    id={`btn-pay-user-balance-${req.id}`}
-                                    title={`Return balance of ${settings.currencySymbol}${reqAvailableBal.toLocaleString('en-IN')} to customer`}
-                                  >
-                                    <Coins className="w-3.5 h-3.5" />
-                                    <span>Pay User Balance</span>
-                                  </button>
-                                )}
-
-                                {/* 3. BALANCE CLEARED BADGE */}
-                                {isBalCleared && (
-                                  <span className="px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-extrabold flex items-center gap-1">
-                                    <CheckCircle2 className="w-3 h-3" />
-                                    <span>Balance Cleared</span>
-                                  </span>
-                                )}
-
-                                {/* 4. RECORD PAYMENT BUTTON (Calculated Amount) */}
+                                {/* 2. RECORD PAYMENT BUTTON (Calculated Amount) */}
                                 {rem > 0 && (
                                   <button
                                     type="button"
@@ -1711,31 +1693,7 @@ export const AdminPanel: React.FC = () => {
                                 </button>
                               )}
 
-                              {/* 2. Pay User Balance if customer has pending credit to return */}
-                              {hasGpBalToReturn && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setPayUserBalanceData({
-                                      customer: {
-                                        userId: gp.userId,
-                                        userMobile: gp.userMobile,
-                                        userName: gp.userName,
-                                      },
-                                      currentBalance: gpAvailableBal,
-                                      relatedGroupPaymentId: gp.id,
-                                    })
-                                  }
-                                  className="py-1.5 px-3 bg-amber-600 hover:bg-amber-500 text-white font-extrabold text-xs rounded-xl shadow-sm flex items-center gap-1.5 active:scale-[0.98]"
-                                  id={`btn-pay-user-balance-group-${gp.id}`}
-                                  title="Return user balance to customer"
-                                >
-                                  <Coins className="w-3.5 h-3.5" />
-                                  <span>Pay User Balance</span>
-                                </button>
-                              )}
-
-                              {/* 3. Balance Cleared Badge */}
+                              {/* Balance Cleared Badge */}
                               {isGpCleared && (
                                 <span className="px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-extrabold flex items-center gap-1">
                                   <CheckCircle2 className="w-3 h-3" />
@@ -1816,22 +1774,42 @@ export const AdminPanel: React.FC = () => {
 
                         <p className="text-xs text-zinc-300">{req.purpose}</p>
 
+                        {/* Balance Refund Information if Balance was used */}
+                        {req.balanceUsed && req.balanceUsed > 0 && (
+                          <div className="p-3 rounded-xl bg-zinc-950/80 border border-zinc-800 text-xs flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 text-zinc-300">
+                              <Coins className="w-4 h-4 text-amber-400 shrink-0" />
+                              <span>
+                                Balance Used for Request: <strong className="text-white">{settings.currencySymbol}{req.balanceUsed.toLocaleString('en-IN')}</strong>
+                              </span>
+                            </div>
+                            {req.balanceRefunded && req.balanceRefunded > 0 ? (
+                              <div className="flex items-center gap-1.5 text-emerald-400 font-extrabold text-[11px]">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>{settings.currencySymbol}{req.balanceRefunded.toLocaleString('en-IN')} Returned to Customer Balance</span>
+                              </div>
+                            ) : (
+                              <span className="text-zinc-500 text-[11px]">Balance refund processed</span>
+                            )}
+                          </div>
+                        )}
+
                         {/* Rejection Details Box */}
                         <div className="p-3 rounded-xl bg-zinc-950/80 border border-rose-900/40 text-xs space-y-1">
-                          <div className="flex items-center gap-2 text-rose-300 font-bold">
-                            <span>Reason for Rejection:</span>
+                          <div className="flex items-start gap-2 text-rose-300 font-bold">
+                            <span className="shrink-0">Rejection Reason:</span>
                             <span className="text-white font-normal">
-                              {req.rejectionNote || req.adminNotes || 'Request rejected by admin.'}
+                              {req.rejectionReason || req.rejectionNote || req.adminNotes || 'Request rejected by admin.'}
                             </span>
                           </div>
-                          <div className="flex items-center gap-4 text-[11px] text-zinc-400">
+                          <div className="flex items-center gap-4 text-[11px] text-zinc-400 flex-wrap">
                             <span>
-                              Date & Time:{' '}
+                              Rejected Date & Time:{' '}
                               {req.rejectedAt
                                 ? new Date(req.rejectedAt).toLocaleString('en-IN')
                                 : new Date(req.updatedAt || req.createdAt).toLocaleString('en-IN')}
                             </span>
-                            {req.rejectedBy && <span>Rejected By: {req.rejectedBy}</span>}
+                            <span>Rejected By: {req.rejectedBy || 'ADMIN'}</span>
                           </div>
                         </div>
 
@@ -1843,12 +1821,22 @@ export const AdminPanel: React.FC = () => {
                       </div>
 
                       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 border-t lg:border-t-0 pt-3 lg:pt-0 border-zinc-800">
-                        <div className="text-left sm:text-right text-xs">
+                        <div className="text-left sm:text-right text-xs space-y-0.5">
                           <span className="text-zinc-400 block font-bold">
-                            Price: {settings.currencySymbol}{actual.toLocaleString('en-IN')}
+                            Original Amount: {settings.currencySymbol}{actual.toLocaleString('en-IN')}
                           </span>
-                          <span className="text-zinc-500 text-[11px] block">
-                            Excluded from balance
+                          {req.amountPaid && req.amountPaid > 0 && (
+                            <span className="text-zinc-400 block text-[11px]">
+                              Payments Made: {settings.currencySymbol}{req.amountPaid.toLocaleString('en-IN')}
+                            </span>
+                          )}
+                          {req.balanceUsed && req.balanceUsed > 0 && (
+                            <span className="text-amber-400 block text-[11px]">
+                              Balance Used: {settings.currencySymbol}{req.balanceUsed.toLocaleString('en-IN')}
+                            </span>
+                          )}
+                          <span className="text-rose-400 text-[10px] font-semibold block">
+                            Excluded from active metrics &amp; balance
                           </span>
                         </div>
 
@@ -2568,12 +2556,38 @@ export const AdminPanel: React.FC = () => {
                   transactions={userBalInfo.transactions}
                   title="Balance & Credit Transactions History"
                   emptyText="No credit or balance transactions recorded for this customer yet."
+                  isAdmin={true}
+                  onReverseTransaction={(tx) => {
+                    setBalanceActionTx(tx);
+                    setBalanceActionMode('reverse');
+                  }}
+                  onEditTransaction={(tx) => {
+                    setBalanceActionTx(tx);
+                    setBalanceActionMode('edit');
+                  }}
+                  onCancelTransaction={(tx) => {
+                    setBalanceActionTx(tx);
+                    setBalanceActionMode('cancel');
+                  }}
                 />
               </div>
             </div>
           </div>
         );
       })()}
+
+      {/* Admin Balance Action Modal (Reverse / Edit / Cancel) */}
+      {balanceActionTx && balanceActionMode && (
+        <AdminBalanceActionModal
+          isOpen={!!balanceActionTx && !!balanceActionMode}
+          transaction={balanceActionTx}
+          mode={balanceActionMode}
+          onClose={() => {
+            setBalanceActionTx(null);
+            setBalanceActionMode(null);
+          }}
+        />
+      )}
 
       {/* Balance Action Modal (Pay Balance / Use Balance) */}
       {balanceModalUser && balanceModalMode && (

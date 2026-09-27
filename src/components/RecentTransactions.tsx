@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../context/AppContext';
 import { getCategoryInfo } from '../data/categories';
 import { generateAvatarSvg, formatCurrency } from '../lib/utils';
+import { isRequestRejected } from '../lib/calculations';
 import { Transaction } from '../types';
 import { RecordPaymentModal } from './RecordPaymentModal';
 import {
@@ -68,6 +69,11 @@ export const RecentTransactions: React.FC = () => {
   const filteredTransactions = useMemo(() => {
     return transactions
       .filter((tx) => {
+        // Exclude rejected transactions from active view
+        if (isRequestRejected(tx as any) && (filters.status as string) !== 'Rejected') {
+          return false;
+        }
+
         // Search
         if (filters.searchQuery) {
           const q = filters.searchQuery.toLowerCase();

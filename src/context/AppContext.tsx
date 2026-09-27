@@ -127,6 +127,29 @@ interface AppContextType {
     reason?: string;
     notes?: string;
   }) => Promise<void>;
+  adminDebitUserBalance: (params: {
+    userId?: string;
+    userMobile: string;
+    userName: string;
+    amount: number;
+    type?: 'Balance Debit' | 'Balance Reversal' | 'Balance Correction';
+    reason: string;
+    notes?: string;
+  }) => Promise<void>;
+  adminReverseBalanceCredit: (params: {
+    originalTransactionId: string;
+    reason: string;
+    amountToReverse?: number;
+  }) => Promise<void>;
+  adminEditBalanceCredit: (params: {
+    originalTransactionId: string;
+    newIntendedAmount: number;
+    reason: string;
+  }) => Promise<void>;
+  adminCancelBalanceCredit: (params: {
+    originalTransactionId: string;
+    reason: string;
+  }) => Promise<void>;
 
   // Notifications
   adminNotifications: AppNotification[];
@@ -468,7 +491,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Filter requests for the current user
   const userRequests = currentUser
-    ? allRequests.filter((r) => r.userMobile === currentUser.mobileNumber)
+    ? allRequests.filter(
+        (r) =>
+          r.userMobile === currentUser.mobileNumber ||
+          (r.userId && r.userId === currentUser.id)
+      )
     : [];
 
   // Filter notifications for current user - strict database isolation
@@ -1360,17 +1387,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     enforceAdminAccess();
     const docRef = doc(db, 'requests', requestId);
     const snap = await getDoc(docRef);
-    if (!snap.exists()) return;
+    if (!snap.exists()) {
+      showToast('Error: Request not found in database.');
+      return;
+    }
 
     const req = snap.data() as OrderRequest;
+    if (isRequestRejected(req)) {
+      showToast('This request is already marked as Rejected.');
+      return;
+    }
+
+    const cleanReason = (reasonNotes || '').trim() || 'Request rejected by admin';
     const nowIso = new Date().toISOString();
     const now = new Date();
     const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
     const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
 
-    const balanceUsed = req.balanceUsed || 0;
-    const balanceAlreadyRefunded = req.balanceRefunded || 0;
+    // Calculate balance refund strictly once: only the unrefunded balanceUsed
+    const balanceUsed = Number(req.balanceUsed) || 0;
+    const balanceAlreadyRefunded = Number(req.balanceRefunded) || 0;
     const toRefund = Math.max(0, balanceUsed - balanceAlreadyRefunded);
+    const newTotalRefunded = balanceAlreadyRefunded + toRefund;
 
     const batch = writeBatch(db);
 
@@ -1379,9 +1417,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'REQUEST_REJECTED',
       title: 'Request Rejected by Admin',
       timestamp: nowIso,
-      totalPaidSoFar: 0,
+      totalPaidSoFar: Number(req.amountPaid) || 0,
       remainingBalance: 0,
-      notes: reasonNotes,
+      notes: cleanReason,
       actor: 'ADMIN',
     };
 
@@ -1409,20 +1447,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         relatedRequestTitle: req.productName,
         actor: 'ADMIN',
         reason: 'Refund for Rejected Request',
-        notes: `₹${toRefund} balance refunded because request was rejected: ${reasonNotes}`,
+        notes: `₹${toRefund.toLocaleString('en-IN')} balance refunded because request was rejected: ${cleanReason}`,
       };
       batch.set(doc(db, 'balance_transactions', bTxId), sanitizeForFirestore(bTx));
 
-      if (req.userMobile) {
+      if (req.userMobile && req.userMobile.trim()) {
         batch.set(
-          doc(db, 'app_users', req.userMobile),
+          doc(db, 'app_users', req.userMobile.trim()),
           { creditBalance: newBal, updatedAt: nowIso },
           { merge: true }
         );
       }
-      if (req.userId && req.userId !== req.userMobile) {
+      if (req.userId && req.userId.trim() && req.userId.trim() !== req.userMobile?.trim()) {
         batch.set(
-          doc(db, 'app_users', req.userId),
+          doc(db, 'app_users', req.userId.trim()),
           { creditBalance: newBal, updatedAt: nowIso },
           { merge: true }
         );
@@ -1431,47 +1469,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updatedTimeline.push({
         id: 'EVT-REFUND-' + Date.now(),
         type: 'BALANCE_REFUNDED',
-        title: `₹${toRefund} Refunded to DIGIZORT Balance`,
+        title: `₹${toRefund.toLocaleString('en-IN')} Refunded to DIGIZORT Balance`,
         timestamp: nowIso,
-        totalPaidSoFar: 0,
+        totalPaidSoFar: Number(req.amountPaid) || 0,
         remainingBalance: 0,
-        notes: `Balance used of ₹${toRefund} was restored to customer account balance.`,
+        notes: `Balance used of ₹${toRefund.toLocaleString('en-IN')} was restored to customer account balance.`,
         actor: 'ADMIN',
       });
     }
 
-    batch.update(docRef, sanitizeForFirestore({
-      status: 'Rejected',
-      rejectedAt: nowIso,
-      rejectedBy: 'ADMIN',
-      rejectionNote: reasonNotes,
-      remainingAmount: 0,
-      adminNotes: reasonNotes,
-      balanceRefunded: (req.balanceRefunded || 0) + toRefund,
-      timeline: updatedTimeline,
-      updatedAt: nowIso,
-    }));
+    // Persist rejection atomically in Firestore using merge set
+    batch.set(
+      docRef,
+      sanitizeForFirestore({
+        status: 'Rejected',
+        rejectionReason: cleanReason,
+        rejectionNote: cleanReason,
+        rejectedAt: nowIso,
+        rejectedBy: 'ADMIN',
+        remainingAmount: 0,
+        adminNotes: cleanReason,
+        balanceRefunded: newTotalRefunded,
+        timeline: updatedTimeline,
+        updatedAt: nowIso,
+      }),
+      { merge: true }
+    );
 
-    // Notify user
-    const notifId = 'NOTIF-' + Date.now();
-    batch.set(doc(db, 'notifications', notifId), sanitizeForFirestore({
-      id: notifId,
-      targetUserMobile: req.userMobile,
-      title: toRefund > 0 ? 'Request Declined - Balance Refunded' : 'Request Declined',
-      message: toRefund > 0
-        ? `Your request "${req.productName}" was declined: ${reasonNotes}. ₹${toRefund} used from your DIGIZORT balance has been fully refunded back to your account.`
-        : `Your request "${req.productName}" was declined: ${reasonNotes}`,
-      type: 'status_change',
-      timestamp: nowIso,
-      read: false,
-      requestId: requestId,
-    }));
+    // Notify customer
+    if (req.userMobile && req.userMobile.trim()) {
+      const notifId = 'NOTIF-' + Date.now();
+      batch.set(
+        doc(db, 'notifications', notifId),
+        sanitizeForFirestore({
+          id: notifId,
+          targetUserMobile: req.userMobile.trim(),
+          title: toRefund > 0 ? 'Request Declined - Balance Refunded' : 'Request Declined',
+          message:
+            toRefund > 0
+              ? `Your request "${req.productName}" was declined: ${cleanReason}. ₹${toRefund.toLocaleString('en-IN')} used from your DIGIZORT balance has been fully refunded back to your account.`
+              : `Your request "${req.productName}" was declined: ${cleanReason}`,
+          type: 'status_change',
+          timestamp: nowIso,
+          read: false,
+          requestId: requestId,
+        })
+      );
+    }
 
     await batch.commit();
 
+    // Immediately synchronize in-memory allRequests state so UI updates instantly
+    setAllRequests((prev) =>
+      prev.map((r) =>
+        r.id === requestId
+          ? {
+              ...r,
+              status: 'Rejected',
+              rejectionReason: cleanReason,
+              rejectionNote: cleanReason,
+              rejectedAt: nowIso,
+              rejectedBy: 'ADMIN',
+              adminNotes: cleanReason,
+              remainingAmount: 0,
+              balanceRefunded: newTotalRefunded,
+              timeline: updatedTimeline,
+              updatedAt: nowIso,
+            }
+          : r
+      )
+    );
+
     showToast(
       toRefund > 0
-        ? `Request marked as Rejected. ₹${toRefund} balance refunded to ${req.userName}.`
+        ? `Request marked as Rejected. ₹${toRefund.toLocaleString('en-IN')} balance refunded to ${req.userName}.`
         : 'Request marked as Rejected.'
     );
   };
@@ -1480,11 +1551,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     enforceAdminAccess();
     const docRef = doc(db, 'requests', requestId);
     await deleteDoc(docRef);
+    setAllRequests((prev) => prev.filter((r) => r.id !== requestId));
     showToast('Request permanently deleted.');
   };
 
   const adminUpdateStatus = async (requestId: string, newStatus: RequestStatus, notes?: string) => {
     enforceAdminAccess();
+    if (newStatus === 'Rejected') {
+      await adminRejectRequest(requestId, notes || 'Status updated to Rejected by Admin');
+      return;
+    }
+
     const docRef = doc(db, 'requests', requestId);
     const snap = await getDoc(docRef);
     if (!snap.exists()) return;
@@ -1503,11 +1580,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       actor: 'ADMIN',
     };
 
+    const updatedTimeline = [...(req.timeline || []), newTimelineEvt];
+
     await updateDoc(docRef, sanitizeForFirestore({
       status: newStatus,
-      timeline: [...(req.timeline || []), newTimelineEvt],
+      timeline: updatedTimeline,
       updatedAt: nowIso,
     }));
+
+    setAllRequests((prev) =>
+      prev.map((r) =>
+        r.id === requestId
+          ? {
+              ...r,
+              status: newStatus,
+              timeline: updatedTimeline,
+              updatedAt: nowIso,
+            }
+          : r
+      )
+    );
 
     // Notify user
     const notifId = 'NOTIF-' + Date.now();
@@ -2744,6 +2836,495 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast(`Added ₹${numAmount.toLocaleString('en-IN')} to ${userName}'s balance (${reason}).`);
   };
 
+  const adminDebitUserBalance = async (params: {
+    userId?: string;
+    userMobile: string;
+    userName: string;
+    amount: number;
+    type?: 'Balance Debit' | 'Balance Reversal' | 'Balance Correction';
+    reason: string;
+    notes?: string;
+  }): Promise<void> => {
+    enforceAdminAccess();
+    const { userId, userMobile, userName, amount, type = 'Balance Debit', reason, notes } = params;
+    const numAmount = Number(amount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      throw new Error('Amount must be greater than ₹0.');
+    }
+    if (!reason || !reason.trim()) {
+      throw new Error('A reason is strictly required to adjust customer balance.');
+    }
+    const balInfo = getUserBalanceInfo(userMobile, userId);
+    const currentAvailable = balInfo.availableBalance;
+    if (numAmount > currentAvailable) {
+      throw new Error(
+        `Cannot debit ₹${numAmount.toLocaleString('en-IN')}: Customer available balance is only ₹${currentAvailable.toLocaleString('en-IN')}. Balance cannot become negative.`
+      );
+    }
+
+    const remainingBalance = Math.max(0, currentAvailable - numAmount);
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const txId = 'BTX-DEBIT-' + Date.now();
+
+    const batch = writeBatch(db);
+
+    const txDoc: BalanceTransaction = {
+      id: txId,
+      userId: userId || '',
+      userName,
+      userMobile,
+      type: type,
+      amount: numAmount,
+      previousBalance: currentAvailable,
+      remainingBalance,
+      reason: reason.trim(),
+      date: dateStr,
+      time: timeStr,
+      timestamp: nowIso,
+      status: 'Completed',
+      actor: 'ADMIN',
+      notes: notes?.trim() || `Balance adjustment (${reason.trim()}) by admin`,
+    };
+    batch.set(doc(db, 'balance_transactions', txId), sanitizeForFirestore(txDoc));
+
+    if (userMobile && userMobile.trim()) {
+      batch.set(
+        doc(db, 'app_users', userMobile.trim()),
+        { creditBalance: remainingBalance, updatedAt: nowIso },
+        { merge: true }
+      );
+    }
+    if (userId && userId.trim() && userId.trim() !== userMobile?.trim()) {
+      batch.set(
+        doc(db, 'app_users', userId.trim()),
+        { creditBalance: remainingBalance, updatedAt: nowIso },
+        { merge: true }
+      );
+    }
+
+    const notifId = 'NOTIF-BAL-DEBIT-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', notifId),
+      sanitizeForFirestore({
+        id: notifId,
+        targetUserMobile: userMobile,
+        title: 'Balance Adjustment',
+        message: `₹${numAmount.toLocaleString('en-IN')} was deducted from your DIGIZORT balance. Reason: ${reason.trim()}. New Available Balance: ₹${remainingBalance.toLocaleString('en-IN')}.${notes ? ` Note: ${notes}` : ''}`,
+        type: 'info',
+        timestamp: nowIso,
+        read: false,
+      })
+    );
+
+    await batch.commit();
+    showToast(`Debited ₹${numAmount.toLocaleString('en-IN')} from ${userName}'s balance (${reason.trim()}).`);
+  };
+
+  const adminReverseBalanceCredit = async (params: {
+    originalTransactionId: string;
+    reason: string;
+    amountToReverse?: number;
+  }): Promise<void> => {
+    enforceAdminAccess();
+    const { originalTransactionId, reason, amountToReverse } = params;
+    if (!reason || !reason.trim()) {
+      throw new Error('A reason is strictly required to reverse a balance credit.');
+    }
+
+    // Locate original transaction
+    let origTx = balanceTransactions.find((t) => t.id === originalTransactionId);
+    if (!origTx) {
+      const snap = await getDoc(doc(db, 'balance_transactions', originalTransactionId));
+      if (snap.exists()) {
+        origTx = snap.data() as BalanceTransaction;
+      }
+    }
+    if (!origTx) {
+      throw new Error('Original balance credit transaction not found.');
+    }
+
+    if (origTx.status === 'Cancelled' || origTx.status === 'Reversed') {
+      throw new Error(`This transaction has already been marked as ${origTx.status} and cannot be reversed again.`);
+    }
+
+    // Read current user available balance
+    const balInfo = getUserBalanceInfo(origTx.userMobile, origTx.userId);
+    const currentAvailable = balInfo.availableBalance;
+    const origAmount = origTx.newIntendedAmount ?? origTx.originalCreditAmount ?? origTx.amount;
+
+    // Never allow negative balance! Max safe to reverse is min(origAmount, currentAvailable)
+    const maxSafeReversible = Math.min(origAmount, currentAvailable);
+    if (maxSafeReversible <= 0 || currentAvailable <= 0) {
+      throw new Error(
+        `Cannot reverse balance: User has already spent the balance, and current available balance is ₹${currentAvailable}. Balance cannot become negative.`
+      );
+    }
+
+    const reverseAmt = amountToReverse !== undefined && Number(amountToReverse) > 0
+      ? Math.min(Number(amountToReverse), maxSafeReversible)
+      : maxSafeReversible;
+
+    if (reverseAmt <= 0) {
+      throw new Error('Invalid reversal amount.');
+    }
+
+    const newBalance = Math.max(0, currentAvailable - reverseAmt);
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const newTxId = 'BTX-REV-' + Date.now();
+
+    const batch = writeBatch(db);
+
+    // 1. Create compensating reversal transaction in ledger
+    const revTx: BalanceTransaction = {
+      id: newTxId,
+      userId: origTx.userId,
+      userName: origTx.userName,
+      userMobile: origTx.userMobile,
+      type: 'Balance Reversal',
+      amount: reverseAmt,
+      previousBalance: currentAvailable,
+      remainingBalance: newBalance,
+      reason: reason.trim(),
+      date: dateStr,
+      time: timeStr,
+      timestamp: nowIso,
+      relatedTransactionId: origTx.id,
+      status: 'Completed',
+      actor: 'ADMIN',
+      notes: `Reversal of ₹${reverseAmt.toLocaleString('en-IN')} from credit #${origTx.id} (${origTx.reason || 'Admin Credit'}). Reason: ${reason.trim()}`,
+    };
+    batch.set(doc(db, 'balance_transactions', newTxId), sanitizeForFirestore(revTx));
+
+    // 2. Update metadata on original transaction (mark as Reversed, preserve historical integrity)
+    batch.update(
+      doc(db, 'balance_transactions', origTx.id),
+      sanitizeForFirestore({
+        status: 'Reversed',
+        reversedAt: nowIso,
+        reversedBy: 'ADMIN',
+        reversalReason: reason.trim(),
+        reversalTransactionId: newTxId,
+      })
+    );
+
+    // 3. Atomically update user balance in app_users
+    if (origTx.userMobile) {
+      batch.set(
+        doc(db, 'app_users', origTx.userMobile),
+        { creditBalance: newBalance, updatedAt: nowIso },
+        { merge: true }
+      );
+    }
+    if (origTx.userId && origTx.userId !== origTx.userMobile) {
+      batch.set(
+        doc(db, 'app_users', origTx.userId),
+        { creditBalance: newBalance, updatedAt: nowIso },
+        { merge: true }
+      );
+    }
+
+    // 4. Admin audit notification
+    const adminNotifId = 'NOTIF-ADM-REV-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', adminNotifId),
+      sanitizeForFirestore({
+        id: adminNotifId,
+        targetUserMobile: 'ADMIN',
+        title: 'Balance Reversal Processed',
+        message: `Admin reversed ₹${reverseAmt.toLocaleString('en-IN')} credit for ${origTx.userName} (${origTx.userMobile}). Reason: ${reason.trim()}. Remaining Balance: ₹${newBalance.toLocaleString('en-IN')}.`,
+        type: 'info',
+        timestamp: nowIso,
+        read: false,
+        relatedTransactionId: origTx.id,
+      })
+    );
+
+    // 5. User notification
+    const userNotifId = 'NOTIF-USR-REV-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', userNotifId),
+      sanitizeForFirestore({
+        id: userNotifId,
+        targetUserMobile: origTx.userMobile,
+        title: 'Balance Reversed',
+        message: `₹${reverseAmt.toLocaleString('en-IN')} was reversed from your DIGIZORT balance by admin. Reason: ${reason.trim()}. New Available Balance: ₹${newBalance.toLocaleString('en-IN')}.`,
+        type: 'info',
+        timestamp: nowIso,
+        read: false,
+      })
+    );
+
+    await batch.commit();
+
+    showToast(
+      `Reversed ₹${reverseAmt.toLocaleString('en-IN')} from ${origTx.userName}'s balance.`
+    );
+  };
+
+  const adminEditBalanceCredit = async (params: {
+    originalTransactionId: string;
+    newIntendedAmount: number;
+    reason: string;
+  }): Promise<void> => {
+    enforceAdminAccess();
+    const { originalTransactionId, newIntendedAmount, reason } = params;
+    if (!reason || !reason.trim()) {
+      throw new Error('A reason is strictly required for financial corrections.');
+    }
+    const numIntended = Number(newIntendedAmount);
+    if (isNaN(numIntended) || numIntended < 0) {
+      throw new Error('New intended amount must be a valid number greater than or equal to ₹0.');
+    }
+
+    let origTx = balanceTransactions.find((t) => t.id === originalTransactionId);
+    if (!origTx) {
+      const snap = await getDoc(doc(db, 'balance_transactions', originalTransactionId));
+      if (snap.exists()) {
+        origTx = snap.data() as BalanceTransaction;
+      }
+    }
+    if (!origTx) {
+      throw new Error('Original balance credit transaction not found.');
+    }
+
+    if (origTx.status === 'Cancelled' || origTx.status === 'Reversed') {
+      throw new Error(`This transaction is already ${origTx.status} and cannot be edited.`);
+    }
+
+    const origAmount = origTx.newIntendedAmount ?? origTx.originalCreditAmount ?? origTx.amount;
+    const diff = numIntended - origAmount;
+    if (diff === 0) {
+      throw new Error('The new intended amount is identical to the current amount.');
+    }
+
+    const balInfo = getUserBalanceInfo(origTx.userMobile, origTx.userId);
+    const currentAvailable = balInfo.availableBalance;
+
+    // If reducing the balance credit, ensure we do NOT create a negative balance!
+    if (diff < 0) {
+      const reduction = Math.abs(diff);
+      if (reduction > currentAvailable) {
+        throw new Error(
+          `Cannot reduce credit by ₹${reduction.toLocaleString('en-IN')}: Customer only has ₹${currentAvailable.toLocaleString('en-IN')} available balance. Minimum intended amount without negative balance is ₹${Math.max(0, origAmount - currentAvailable).toLocaleString('en-IN')}.`
+        );
+      }
+    }
+
+    const newBalance = diff < 0
+      ? Math.max(0, currentAvailable - Math.abs(diff))
+      : currentAvailable + diff;
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const compTxId = 'BTX-CORR-' + Date.now();
+
+    const batch = writeBatch(db);
+
+    // 1. Create compensating transaction
+    const compTx: BalanceTransaction = {
+      id: compTxId,
+      userId: origTx.userId,
+      userName: origTx.userName,
+      userMobile: origTx.userMobile,
+      type: 'Balance Correction',
+      amount: Math.abs(diff),
+      previousBalance: currentAvailable,
+      remainingBalance: newBalance,
+      reason: reason.trim(),
+      date: dateStr,
+      time: timeStr,
+      timestamp: nowIso,
+      relatedTransactionId: origTx.id,
+      status: 'Completed',
+      actor: 'ADMIN',
+      notes: `Balance correction on credit #${origTx.id}: intended amount adjusted from ₹${origAmount.toLocaleString('en-IN')} to ₹${numIntended.toLocaleString('en-IN')} (${diff < 0 ? '-' : '+'}₹${Math.abs(diff).toLocaleString('en-IN')}). Reason: ${reason.trim()}`,
+    };
+    batch.set(doc(db, 'balance_transactions', compTxId), sanitizeForFirestore(compTx));
+
+    // 2. Update original credit with audit metadata
+    batch.update(
+      doc(db, 'balance_transactions', origTx.id),
+      sanitizeForFirestore({
+        status: 'Corrected',
+        originalCreditAmount: origTx.originalCreditAmount ?? origTx.amount,
+        newIntendedAmount: numIntended,
+        correctedAt: nowIso,
+        correctedBy: 'ADMIN',
+        correctionReason: reason.trim(),
+        correctionTransactionId: compTxId,
+      })
+    );
+
+    // 3. Update user credit balance
+    if (origTx.userMobile) {
+      batch.set(
+        doc(db, 'app_users', origTx.userMobile),
+        { creditBalance: newBalance, updatedAt: nowIso },
+        { merge: true }
+      );
+    }
+    if (origTx.userId && origTx.userId !== origTx.userMobile) {
+      batch.set(
+        doc(db, 'app_users', origTx.userId),
+        { creditBalance: newBalance, updatedAt: nowIso },
+        { merge: true }
+      );
+    }
+
+    // 4. Notifications
+    const notifMsg = `Your balance credit was adjusted by admin from ₹${origAmount.toLocaleString('en-IN')} to ₹${numIntended.toLocaleString('en-IN')}. Reason: ${reason.trim()}. New Available Balance: ₹${newBalance.toLocaleString('en-IN')}.`;
+    const userNotifId = 'NOTIF-USR-CORR-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', userNotifId),
+      sanitizeForFirestore({
+        id: userNotifId,
+        targetUserMobile: origTx.userMobile,
+        title: 'Balance Credit Adjusted',
+        message: notifMsg,
+        type: 'info',
+        timestamp: nowIso,
+        read: false,
+      })
+    );
+
+    await batch.commit();
+
+    showToast(
+      `Credit #${origTx.id} corrected to ₹${numIntended.toLocaleString('en-IN')} for ${origTx.userName}.`
+    );
+  };
+
+  const adminCancelBalanceCredit = async (params: {
+    originalTransactionId: string;
+    reason: string;
+  }): Promise<void> => {
+    enforceAdminAccess();
+    const { originalTransactionId, reason } = params;
+    if (!reason || !reason.trim()) {
+      throw new Error('A reason is strictly required to cancel a balance credit.');
+    }
+
+    let origTx = balanceTransactions.find((t) => t.id === originalTransactionId);
+    if (!origTx) {
+      const snap = await getDoc(doc(db, 'balance_transactions', originalTransactionId));
+      if (snap.exists()) {
+        origTx = snap.data() as BalanceTransaction;
+      }
+    }
+    if (!origTx) {
+      throw new Error('Original balance credit transaction not found.');
+    }
+
+    if (origTx.status === 'Cancelled') {
+      throw new Error('This transaction has already been cancelled.');
+    }
+    if (origTx.status === 'Reversed') {
+      throw new Error('This transaction has already been reversed.');
+    }
+
+    const origAmount = origTx.newIntendedAmount ?? origTx.originalCreditAmount ?? origTx.amount;
+    const balInfo = getUserBalanceInfo(origTx.userMobile, origTx.userId);
+    const currentAvailable = balInfo.availableBalance;
+
+    // Safe reversal amount: cannot exceed current available balance!
+    const safeDeduct = Math.min(origAmount, currentAvailable);
+    const newBalance = Math.max(0, currentAvailable - safeDeduct);
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+    const batch = writeBatch(db);
+
+    let compTxId: string | undefined;
+
+    // 1. If safeDeduct > 0, create compensating reversal transaction
+    if (safeDeduct > 0) {
+      compTxId = 'BTX-REV-' + Date.now();
+      const compTx: BalanceTransaction = {
+        id: compTxId,
+        userId: origTx.userId,
+        userName: origTx.userName,
+        userMobile: origTx.userMobile,
+        type: 'Balance Reversal',
+        amount: safeDeduct,
+        previousBalance: currentAvailable,
+        remainingBalance: newBalance,
+        reason: reason.trim(),
+        date: dateStr,
+        time: timeStr,
+        timestamp: nowIso,
+        relatedTransactionId: origTx.id,
+        status: 'Completed',
+        actor: 'ADMIN',
+        notes: `Balance credit #${origTx.id} of ₹${origAmount.toLocaleString('en-IN')} cancelled by admin. Reversal of ₹${safeDeduct.toLocaleString('en-IN')}.${safeDeduct < origAmount ? ` (Partial: ₹${origAmount - safeDeduct} was already spent)` : ''} Reason: ${reason.trim()}`,
+      };
+      batch.set(doc(db, 'balance_transactions', compTxId), sanitizeForFirestore(compTx));
+    }
+
+    // 2. Mark original transaction as Cancelled
+    batch.update(
+      doc(db, 'balance_transactions', origTx.id),
+      sanitizeForFirestore({
+        status: 'Cancelled',
+        cancelledAt: nowIso,
+        cancelledBy: 'ADMIN',
+        cancelReason: reason.trim(),
+        reversalTransactionId: compTxId || '',
+        notes: safeDeduct < origAmount
+          ? `${origTx.notes || ''} [Cancelled by admin: ₹${safeDeduct} reversed, user already spent ₹${origAmount - safeDeduct}]`.trim()
+          : origTx.notes,
+      })
+    );
+
+    // 3. Update user credit balance in app_users
+    if (origTx.userMobile) {
+      batch.set(
+        doc(db, 'app_users', origTx.userMobile),
+        { creditBalance: newBalance, updatedAt: nowIso },
+        { merge: true }
+      );
+    }
+    if (origTx.userId && origTx.userId !== origTx.userMobile) {
+      batch.set(
+        doc(db, 'app_users', origTx.userId),
+        { creditBalance: newBalance, updatedAt: nowIso },
+        { merge: true }
+      );
+    }
+
+    // 4. User Notification
+    const notifMsg = `Balance credit #${origTx.id} (₹${origAmount.toLocaleString('en-IN')}) was cancelled by admin. Reason: ${reason.trim()}.${safeDeduct > 0 ? ` ₹${safeDeduct.toLocaleString('en-IN')} deducted.` : ' (No funds deducted as balance was already spent)'} New Available Balance: ₹${newBalance.toLocaleString('en-IN')}.`;
+    const userNotifId = 'NOTIF-USR-CANCEL-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', userNotifId),
+      sanitizeForFirestore({
+        id: userNotifId,
+        targetUserMobile: origTx.userMobile,
+        title: 'Balance Credit Cancelled',
+        message: notifMsg,
+        type: 'info',
+        timestamp: nowIso,
+        read: false,
+      })
+    );
+
+    await batch.commit();
+
+    showToast(
+      `Credit #${origTx.id} cancelled. ${safeDeduct > 0 ? `₹${safeDeduct.toLocaleString('en-IN')} reversed.` : 'No balance deducted (already spent).'}`
+    );
+  };
+
   const adminSuspendUser = async (userId: string) => {
     enforceAdminAccess();
     await updateDoc(doc(db, 'app_users', userId), { status: 'suspended' });
@@ -2799,6 +3380,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         adminPayBalance,
         adminUseBalance,
         adminAddBalanceAdjustment,
+        adminDebitUserBalance,
+        adminReverseBalanceCredit,
+        adminEditBalanceCredit,
+        adminCancelBalanceCredit,
         adminAcceptRequest,
         adminRejectRequest,
         adminDeleteRequest,

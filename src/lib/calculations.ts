@@ -1,17 +1,34 @@
 import { OrderRequest, GroupPayment, BalanceTransaction, BalanceRequest } from '../types';
 
 /**
- * Returns whether a request is rejected.
+ * Canonical helper: Returns whether a request is rejected.
+ * Case-insensitive, checks both status and rejectedAt marker.
  */
-export function isRequestRejected(request: OrderRequest): boolean {
-  return request.status === 'Rejected' || !!request.rejectedAt;
+export function isRequestRejected(request: OrderRequest | null | undefined): boolean {
+  if (!request) return false;
+  const s = String(request.status || '').trim().toLowerCase();
+  return s === 'rejected' || !!request.rejectedAt || !!request.rejectionReason;
 }
 
 /**
- * Returns whether a request is cancelled.
+ * Canonical helper: Returns whether a request is cancelled.
  */
-export function isRequestCancelled(request: OrderRequest): boolean {
-  return request.status === 'Cancelled';
+export function isRequestCancelled(request: OrderRequest | null | undefined): boolean {
+  if (!request) return false;
+  const s = String(request.status || '').trim().toLowerCase();
+  return s === 'cancelled';
+}
+
+/**
+ * Authoritative system-wide definition of an ACTIVE request.
+ * Strictly excludes:
+ * - Rejected requests
+ * - Cancelled requests
+ * - Missing or invalid requests
+ */
+export function isRequestActive(request: OrderRequest | null | undefined): boolean {
+  if (!request || !request.id) return false;
+  return !isRequestRejected(request) && !isRequestCancelled(request);
 }
 
 /**
@@ -210,8 +227,19 @@ export function calculateAccountSummary(
 
       if (tx.type === 'Balance Added') {
         totalExtraCashCollected += tx.amount || 0;
-      } else if (tx.type === 'Balance Returned' || tx.type === 'Balance Paid' || tx.type === 'Balance Used') {
+      } else if (
+        tx.type === 'Balance Returned' ||
+        tx.type === 'Balance Paid' ||
+        tx.type === 'Balance Used' ||
+        tx.type === 'Balance Reversal'
+      ) {
         totalExtraCashReturned += tx.amount || 0;
+      } else if (tx.type === 'Balance Correction') {
+        if (tx.remainingBalance < tx.previousBalance) {
+          totalExtraCashReturned += tx.amount || 0;
+        } else {
+          totalExtraCashCollected += tx.amount || 0;
+        }
       }
     }
 
@@ -429,6 +457,73 @@ export function getUserAvailableBalance(
     balanceRequests: userBReqs,
     hasTransactions,
     statusText,
+  };
+}
+
+/**
+ * Detailed balance breakdown for Admin Panel -> Manage Customers -> User Details -> Balance.
+ */
+export interface UserBalanceBreakdown {
+  availableBalance: number;
+  totalAdded: number;
+  totalUsed: number;
+  totalReturned: number;
+  totalWithdrawn: number;
+  pendingWithdrawals: number;
+}
+
+export function calculateUserBalanceBreakdown(
+  userMobile: string,
+  userId?: string,
+  transactions: BalanceTransaction[] = [],
+  balanceRequests: BalanceRequest[] = []
+): UserBalanceBreakdown {
+  const userTx = transactions.filter(
+    (tx) => (userMobile && tx.userMobile === userMobile) || (userId && tx.userId === userId)
+  );
+
+  let totalAdded = 0;
+  let totalUsed = 0;
+  let totalReturned = 0;
+  let totalWithdrawn = 0;
+
+  for (const tx of userTx) {
+    const amt = Number(tx.amount) || 0;
+    if (tx.type === 'Balance Added') {
+      totalAdded += amt;
+    } else if (tx.type === 'Balance Used') {
+      totalUsed += amt;
+    } else if (tx.type === 'Balance Returned' || tx.type === 'Balance Reversal' || tx.type === 'Balance Debit') {
+      totalReturned += amt;
+    } else if (tx.type === 'Balance Paid') {
+      totalWithdrawn += amt;
+    } else if (tx.type === 'Balance Correction') {
+      if (tx.remainingBalance > tx.previousBalance) {
+        totalAdded += amt;
+      } else {
+        totalReturned += amt;
+      }
+    }
+  }
+
+  const userBReqs = balanceRequests.filter(
+    (br) => (userMobile && br.userMobile === userMobile) || (userId && br.userId === userId)
+  );
+  const paidBReqs = userBReqs.filter((br) => br.status === 'Paid');
+  const pendingBReqs = userBReqs.filter((br) => br.status === 'Pending');
+  const pendingWithdrawals = pendingBReqs.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
+  const totalBReqPaid = paidBReqs.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
+  const finalWithdrawn = Math.max(totalWithdrawn, totalBReqPaid);
+
+  const balInfo = getUserAvailableBalance(userMobile, userId, transactions, [], [], balanceRequests);
+
+  return {
+    availableBalance: balInfo.availableBalance,
+    totalAdded,
+    totalUsed,
+    totalReturned,
+    totalWithdrawn: finalWithdrawn,
+    pendingWithdrawals,
   };
 }
 

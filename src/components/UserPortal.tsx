@@ -5,6 +5,7 @@ import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
 import { OrderRequest, RequestStatus } from '../types';
 import {
   calculateAccountSummary,
+  isRequestActive,
   isRequestRejected,
   getRequestPrice,
   getOriginalPrice,
@@ -43,6 +44,7 @@ import {
   Coins,
   ArrowDownToLine,
   TrendingDown,
+  Ban,
 } from 'lucide-react';
 import { BalanceLedgerView } from './BalanceLedgerView';
 import { RequestMoneyModal } from './RequestMoneyModal';
@@ -68,13 +70,14 @@ export const UserPortal: React.FC = () => {
     showToast,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'requests' | 'timeline' | 'documents' | 'notifications' | 'profile' | 'balance'>('requests');
+  const [activeTab, setActiveTab] = useState<'requests' | 'timeline' | 'documents' | 'notifications' | 'profile' | 'balance' | 'rejected'>('requests');
   const [isNewRequestOpen, setIsNewRequestOpen] = useState(false);
   const [newRequestInitialUseBalance, setNewRequestInitialUseBalance] = useState(false);
   const [payWithBalanceReq, setPayWithBalanceReq] = useState<OrderRequest | null>(null);
   const [isRequestMoneyOpen, setIsRequestMoneyOpen] = useState(false);
   const [selectedReq, setSelectedReq] = useState<OrderRequest | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [rejectedSearchQuery, setRejectedSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
 
   // Unread balance added notifications for real-time and offline popup notification
@@ -107,15 +110,13 @@ export const UserPortal: React.FC = () => {
 
   if (!currentUser) return null;
 
-  // Non-rejected user requests (active ledger)
-  const nonRejectedUserRequests = userRequests.filter((req) => !isRequestRejected(req));
+  // Authoritative separation of genuinely active user requests vs rejected requests
+  const activeUserRequests = userRequests.filter(isRequestActive);
+  const rejectedUserRequests = userRequests.filter(isRequestRejected);
 
-  // Filter user requests for display
-  const filteredRequests = userRequests.filter((req) => {
-    // If status filter is 'All', strictly exclude rejected requests as requested
-    if (statusFilter === 'All') {
-      if (isRequestRejected(req)) return false;
-    } else if (req.status !== statusFilter) {
+  // Filter active user requests for display (strictly excludes rejected requests)
+  const filteredRequests = activeUserRequests.filter((req) => {
+    if (statusFilter !== 'All' && req.status !== statusFilter) {
       return false;
     }
 
@@ -129,13 +130,26 @@ export const UserPortal: React.FC = () => {
     return true;
   });
 
+  // Filter rejected requests for display
+  const filteredRejectedRequests = rejectedUserRequests.filter((req) => {
+    if (rejectedSearchQuery) {
+      const q = rejectedSearchQuery.toLowerCase();
+      const matchesName = req.productName.toLowerCase().includes(q);
+      const matchesPurpose = req.purpose.toLowerCase().includes(q);
+      const matchesId = req.id.toLowerCase().includes(q);
+      const matchesReason = (req.rejectionReason || req.rejectionNote || req.adminNotes || '').toLowerCase().includes(q);
+      if (!matchesName && !matchesPurpose && !matchesId && !matchesReason) return false;
+    }
+    return true;
+  });
+
   // Calculate user metrics using centralized helper (strictly excludes rejected requests and includes balance transactions)
   const userTxs = balanceTransactions.filter(
     (t) => t.userMobile === currentUser.mobileNumber || t.userId === currentUser.id
   );
   const userSummary = calculateAccountSummary(userRequests, [], userTxs);
-  const totalRequestsCount = nonRejectedUserRequests.length;
-  const pendingRequestsCount = nonRejectedUserRequests.filter(
+  const totalRequestsCount = activeUserRequests.length;
+  const pendingRequestsCount = activeUserRequests.filter(
     (r) =>
       r.status === 'Pending Review' ||
       r.status === 'Accepted' ||
@@ -524,6 +538,21 @@ export const UserPortal: React.FC = () => {
             <span>Notifications ({notifications.filter((n) => !n.read).length})</span>
           </button>
 
+          {rejectedUserRequests.length > 0 && (
+            <button
+              onClick={() => setActiveTab('rejected')}
+              className={`py-2 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
+                activeTab === 'rejected'
+                  ? 'bg-rose-600 text-white shadow-md'
+                  : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+              }`}
+              id="user-tab-rejected"
+            >
+              <Ban className="w-4 h-4 text-rose-400" />
+              <span>Rejected Orders ({rejectedUserRequests.length})</span>
+            </button>
+          )}
+
           <button
             onClick={() => setActiveTab('profile')}
             className={`py-2 px-4 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2 ${
@@ -541,6 +570,25 @@ export const UserPortal: React.FC = () => {
         {/* TAB 1: MY REQUESTS */}
         {activeTab === 'requests' && (
           <div className="space-y-4">
+            {/* Banner for rejected requests if present */}
+            {rejectedUserRequests.length > 0 && (
+              <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/25 flex items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2.5 text-rose-300">
+                  <Ban className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>
+                    You have <strong>{rejectedUserRequests.length} rejected order request{rejectedUserRequests.length > 1 ? 's' : ''}</strong>. They have been removed from your active balance.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('rejected')}
+                  className="py-1 px-3 bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white rounded-lg font-bold text-xs shrink-0 transition-all border border-rose-500/40"
+                >
+                  View Rejected ({rejectedUserRequests.length}) →
+                </button>
+              </div>
+            )}
+
             {/* Search & Status Filter */}
             <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800/80">
               <div className="relative flex-1">
@@ -556,10 +604,16 @@ export const UserPortal: React.FC = () => {
 
               <select
                 value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
+                onChange={(e) => {
+                  if (e.target.value === 'Rejected') {
+                    setActiveTab('rejected');
+                  } else {
+                    setStatusFilter(e.target.value);
+                  }
+                }}
                 className="px-3.5 py-2 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-300 focus:outline-none focus:border-[#E53935]"
               >
-                <option value="All">All Statuses</option>
+                <option value="All">All Active Statuses</option>
                 <option value="Pending Review">Pending Review</option>
                 <option value="Accepted">Accepted</option>
                 <option value="Processing">Processing</option>
@@ -567,6 +621,9 @@ export const UserPortal: React.FC = () => {
                 <option value="Waiting For Payment">Waiting For Payment</option>
                 <option value="Partially Paid">Partially Paid</option>
                 <option value="Paid">Paid</option>
+                {rejectedUserRequests.length > 0 && (
+                  <option value="Rejected">Go to Rejected Orders ({rejectedUserRequests.length}) →</option>
+                )}
               </select>
             </div>
 
@@ -575,16 +632,16 @@ export const UserPortal: React.FC = () => {
               <div className="p-12 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-3xl space-y-3">
                 <ShoppingBag className="w-12 h-12 text-zinc-600 mx-auto" />
                 <h4 className="text-sm font-bold text-zinc-300">
-                  {userRequests.length === 0
-                    ? 'You have not submitted any order requests yet.'
+                  {activeUserRequests.length === 0
+                    ? 'You have no active order requests at this time.'
                     : 'No requests match your filter.'}
                 </h4>
                 <p className="text-xs text-zinc-500 max-w-sm mx-auto">
-                  {userRequests.length === 0
+                  {activeUserRequests.length === 0
                     ? "Click 'Create New Request' above to submit your first service or order request."
                     : 'Try clearing your search query or selecting a different status filter.'}
                 </p>
-                {userRequests.length === 0 && (
+                {activeUserRequests.length === 0 && (
                   <button
                     onClick={() => setIsNewRequestOpen(true)}
                     className="py-2.5 px-4 bg-[#E53935] hover:brightness-110 text-white font-bold text-xs rounded-xl shadow-lg inline-flex items-center gap-1.5 transition-all"
@@ -1278,6 +1335,160 @@ export const UserPortal: React.FC = () => {
                     {new Date(currentUser.createdAt).toLocaleDateString('en-IN')}
                   </span>
                 </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 7: REJECTED ORDERS (COMPLETE SEPARATION) */}
+        {activeTab === 'rejected' && (
+          <div className="space-y-4">
+            <div className="p-6 rounded-3xl bg-zinc-900/80 border border-rose-900/30 space-y-2">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                  <Ban className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-white">
+                    Rejected Orders ({rejectedUserRequests.length})
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    Requests declined by administrator. Any DIGIZORT balance or funds used for these requests have been restored back to your Available Balance.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Search Filter for Rejected Requests */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Search rejected orders by product name, purpose, ID, or rejection note..."
+                value={rejectedSearchQuery}
+                onChange={(e) => setRejectedSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-rose-500"
+              />
+            </div>
+
+            {filteredRejectedRequests.length === 0 ? (
+              <div className="p-12 text-center bg-zinc-900/40 border border-zinc-800/80 rounded-3xl space-y-2">
+                <Ban className="w-12 h-12 text-zinc-600 mx-auto" />
+                <h4 className="text-sm font-bold text-zinc-300">
+                  {rejectedUserRequests.length === 0
+                    ? 'You have no rejected order requests.'
+                    : 'No rejected requests match your search criteria.'}
+                </h4>
+                <p className="text-xs text-zinc-500">
+                  All your active orders can be viewed under the "My Requests" tab.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {filteredRejectedRequests.map((req) => {
+                  const actual = getRequestPrice(req);
+                  return (
+                    <motion.div
+                      key={req.id}
+                      layout
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-5 rounded-3xl bg-zinc-900 border border-rose-900/40 space-y-4"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-extrabold text-white text-sm">{req.productName}</span>
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center gap-1">
+                              <Ban className="w-3 h-3" />
+                              REJECTED
+                            </span>
+                            {req.balanceRefunded && req.balanceRefunded > 0 && (
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                                <span>₹{req.balanceRefunded.toLocaleString('en-IN')} Refunded to Balance</span>
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-zinc-300">{req.purpose}</p>
+                          <div className="flex items-center gap-3 text-[11px] text-zinc-500 font-medium pt-0.5">
+                            <span>Submitted: {new Date(req.createdAt).toLocaleDateString('en-IN')}</span>
+                            <span>•</span>
+                            <span>Doc ID: #{req.id}</span>
+                          </div>
+                        </div>
+
+                        <div className="text-left sm:text-right shrink-0">
+                          <span className="text-zinc-400 block font-bold text-xs">
+                            Original Amount: {settings.currencySymbol}{actual.toLocaleString('en-IN')}
+                          </span>
+                          {req.balanceUsed && req.balanceUsed > 0 && (
+                            <span className="text-amber-400 block text-[11px] font-semibold">
+                              Balance Used: {settings.currencySymbol}{req.balanceUsed.toLocaleString('en-IN')}
+                            </span>
+                          )}
+                          {req.amountPaid && req.amountPaid > 0 && (
+                            <span className="text-zinc-300 block text-[11px]">
+                              Total Paid: {settings.currencySymbol}{req.amountPaid.toLocaleString('en-IN')}
+                            </span>
+                          )}
+                          <span className="text-[10px] text-rose-400 font-semibold block mt-0.5">
+                            Excluded from active balance due
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Payment & Refund Information Banner if Balance was used */}
+                      {req.balanceUsed && req.balanceUsed > 0 && (
+                        <div className="p-3 rounded-2xl bg-zinc-950/70 border border-zinc-800 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 text-zinc-300">
+                            <Coins className="w-4 h-4 text-amber-400 shrink-0" />
+                            <span>
+                              DIGIZORT Balance Used: <strong className="text-white">{settings.currencySymbol}{req.balanceUsed.toLocaleString('en-IN')}</strong>
+                            </span>
+                          </div>
+                          {req.balanceRefunded && req.balanceRefunded > 0 ? (
+                            <div className="flex items-center gap-1.5 text-emerald-400 font-extrabold text-[11px]">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>{settings.currencySymbol}{req.balanceRefunded.toLocaleString('en-IN')} Returned to your Available Balance</span>
+                            </div>
+                          ) : (
+                            <div className="text-zinc-500 text-[11px]">Balance refund processed</div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Rejection Details Box */}
+                      <div className="p-3.5 rounded-2xl bg-zinc-950 border border-rose-900/40 text-xs space-y-1.5">
+                        <div className="flex items-start gap-2 text-rose-300">
+                          <span className="font-bold shrink-0">Admin Rejection Reason:</span>
+                          <span className="text-zinc-200">
+                            {req.rejectionReason || req.rejectionNote || req.adminNotes || 'Request declined by administrator.'}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-zinc-500 flex items-center gap-4 flex-wrap">
+                          <span>
+                            Declined on:{' '}
+                            {req.rejectedAt
+                              ? new Date(req.rejectedAt).toLocaleString('en-IN')
+                              : new Date(req.updatedAt || req.createdAt).toLocaleString('en-IN')}
+                          </span>
+                          {req.rejectedBy && <span>Reviewed by: {req.rejectedBy}</span>}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-2 border-t border-zinc-800">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedReq(req)}
+                          className="py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold rounded-xl transition-colors"
+                        >
+                          View Details &amp; History
+                        </button>
+                      </div>
+                    </motion.div>
+                  );
+                })}
               </div>
             )}
           </div>

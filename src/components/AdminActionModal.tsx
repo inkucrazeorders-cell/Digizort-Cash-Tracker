@@ -94,7 +94,11 @@ export const AdminActionModal: React.FC<AdminActionModalProps> = ({
       } else if (actionType === 'delete') {
         await adminDeleteRequest(request.id);
       } else if (actionType === 'status') {
-        await adminUpdateStatus(request.id, selectedStatus, adminNote.trim() || undefined);
+        if (selectedStatus === 'Rejected') {
+          await adminRejectRequest(request.id, adminNote.trim() || 'Request rejected by admin.');
+        } else {
+          await adminUpdateStatus(request.id, selectedStatus, adminNote.trim() || undefined);
+        }
       } else if (actionType === 'payment') {
         if (paymentToRecord <= 0) return;
         if (paymentSource === 'balance') {

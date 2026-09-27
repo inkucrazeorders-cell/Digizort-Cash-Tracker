@@ -2,6 +2,7 @@ import React from 'react';
 import { motion } from 'motion/react';
 import { useApp } from '../context/AppContext';
 import { formatCurrency } from '../lib/utils';
+import { isRequestRejected } from '../lib/calculations';
 import {
   Clock,
   CheckCircle2,
@@ -14,19 +15,21 @@ import {
 export const DashboardSummary: React.FC = () => {
   const { transactions, friendsList, settings, setCurrentView, setFilters } = useApp();
 
-  const totalPending = transactions
+  const activeTxList = transactions.filter((t) => !isRequestRejected(t as any));
+
+  const totalPending = activeTxList
     .filter((t) => t.status === 'Pending')
     .reduce((acc, t) => acc + t.amount, 0);
 
-  const totalCollected = transactions
+  const totalCollected = activeTxList
     .filter((t) => t.status === 'Paid')
     .reduce((acc, t) => acc + t.amount, 0);
 
   const pendingFriendsCount = friendsList.filter((f) => f.totalPending > 0).length;
 
-  const completedCount = transactions.filter((t) => t.status === 'Paid').length;
+  const completedCount = activeTxList.filter((t) => t.status === 'Paid').length;
 
-  const pendingCount = transactions.filter((t) => t.status === 'Pending').length;
+  const pendingCount = activeTxList.filter((t) => t.status === 'Pending').length;
 
   const cards = [
     {

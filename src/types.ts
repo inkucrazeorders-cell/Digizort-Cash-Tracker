@@ -125,6 +125,7 @@ export interface OrderRequest {
   rejectedAt?: string;
   rejectedBy?: string;
   rejectionNote?: string;
+  rejectionReason?: string;
   extraCash?: number;
   extraCashPaid?: number;
   cashReceived?: number;
@@ -174,7 +175,10 @@ export type BalanceTransactionType =
   | 'Balance Returned'
   | 'Balance Paid'
   | 'Money Requested'
-  | 'Balance Adjustment';
+  | 'Balance Adjustment'
+  | 'Balance Reversal'
+  | 'Balance Correction'
+  | 'Balance Debit';
 
 export interface BalanceTransaction {
   id: string;
@@ -193,9 +197,25 @@ export interface BalanceTransaction {
   relatedRequestTitle?: string;
   relatedGroupPaymentId?: string;
   relatedBalanceRequestId?: string;
-  status?: 'Completed' | 'Pending' | 'Rejected' | 'Cancelled';
+  relatedTransactionId?: string;
+  status?: 'Completed' | 'Pending' | 'Rejected' | 'Cancelled' | 'Reversed' | 'Corrected';
   actor: 'ADMIN' | 'USER';
   notes?: string;
+  // Audit metadata for Admin-granted balance management
+  isReversible?: boolean;
+  cancelledAt?: string;
+  cancelledBy?: string;
+  cancelReason?: string;
+  reversedAt?: string;
+  reversedBy?: string;
+  reversalReason?: string;
+  reversalTransactionId?: string;
+  correctedAt?: string;
+  correctedBy?: string;
+  correctionReason?: string;
+  correctionTransactionId?: string;
+  originalCreditAmount?: number;
+  newIntendedAmount?: number;
 }
 
 export type BalanceRequestStatus = 'Pending' | 'Paid' | 'Rejected' | 'Cancelled';

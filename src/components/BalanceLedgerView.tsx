@@ -10,18 +10,30 @@ import {
   Sparkles,
   Receipt,
   User,
+  RotateCcw,
+  Edit3,
+  Ban,
+  AlertCircle,
 } from 'lucide-react';
 
 interface BalanceLedgerViewProps {
   transactions: BalanceTransaction[];
   title?: string;
   emptyText?: string;
+  isAdmin?: boolean;
+  onReverseTransaction?: (tx: BalanceTransaction) => void;
+  onEditTransaction?: (tx: BalanceTransaction) => void;
+  onCancelTransaction?: (tx: BalanceTransaction) => void;
 }
 
 export const BalanceLedgerView: React.FC<BalanceLedgerViewProps> = ({
   transactions,
   title = 'Balance & Credit Audit Ledger',
   emptyText = 'No balance transactions recorded yet.',
+  isAdmin = false,
+  onReverseTransaction,
+  onEditTransaction,
+  onCancelTransaction,
 }) => {
   if (transactions.length === 0) {
     return (
@@ -66,6 +78,20 @@ export const BalanceLedgerView: React.FC<BalanceLedgerViewProps> = ({
             <span>Money Requested</span>
           </span>
         );
+      case 'Balance Reversal':
+        return (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-rose-500/15 text-rose-300 border border-rose-500/30 flex items-center gap-1">
+            <RotateCcw className="w-3 h-3 text-rose-400" />
+            <span>Balance Reversal</span>
+          </span>
+        );
+      case 'Balance Correction':
+        return (
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 flex items-center gap-1">
+            <Sparkles className="w-3 h-3 text-indigo-400" />
+            <span>Balance Correction</span>
+          </span>
+        );
       default:
         return (
           <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-zinc-800 text-zinc-300 border border-zinc-700">
@@ -75,7 +101,7 @@ export const BalanceLedgerView: React.FC<BalanceLedgerViewProps> = ({
     }
   };
 
-  const getStatusBadge = (status?: string, type?: string) => {
+  const getStatusBadge = (status?: string, type?: string, newIntendedAmount?: number) => {
     const effectiveStatus = status || (type === 'Money Requested' ? 'Pending' : 'Completed');
     switch (effectiveStatus) {
       case 'Completed':
@@ -102,6 +128,20 @@ export const BalanceLedgerView: React.FC<BalanceLedgerViewProps> = ({
             Cancelled
           </span>
         );
+      case 'Reversed':
+        return (
+          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase bg-rose-950/80 text-rose-300 border border-rose-500/30 flex items-center gap-1">
+            <RotateCcw className="w-2.5 h-2.5" />
+            <span>Reversed</span>
+          </span>
+        );
+      case 'Corrected':
+        return (
+          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase bg-blue-950/80 text-blue-300 border border-blue-500/40 flex items-center gap-1">
+            <Edit3 className="w-2.5 h-2.5" />
+            <span>Corrected{newIntendedAmount !== undefined ? ` to ₹${newIntendedAmount.toLocaleString('en-IN')}` : ''}</span>
+          </span>
+        );
       default:
         return null;
     }
@@ -120,21 +160,40 @@ export const BalanceLedgerView: React.FC<BalanceLedgerViewProps> = ({
 
       <div className="space-y-2.5">
         {transactions.map((tx) => {
-          const isCredit = tx.type === 'Balance Added';
-          const isDebit = tx.type === 'Balance Returned' || tx.type === 'Balance Paid' || tx.type === 'Balance Used';
+          const isCredit = tx.type === 'Balance Added' || (tx.type === 'Balance Correction' && tx.remainingBalance > tx.previousBalance);
+          const isDebit =
+            tx.type === 'Balance Returned' ||
+            tx.type === 'Balance Paid' ||
+            tx.type === 'Balance Used' ||
+            tx.type === 'Balance Reversal' ||
+            (tx.type === 'Balance Correction' && tx.remainingBalance < tx.previousBalance);
           const isRequested = tx.type === 'Money Requested';
           const isCleared = tx.remainingBalance === 0 && !isRequested;
+
+          // Check if this is an Admin-created credit eligible for management
+          const isAdminGrant =
+            tx.actor === 'ADMIN' &&
+            (tx.type === 'Balance Added' || tx.type === 'Balance Adjustment');
+          const isReversible =
+            isAdmin &&
+            isAdminGrant &&
+            tx.status !== 'Cancelled' &&
+            tx.status !== 'Reversed';
 
           return (
             <div
               key={tx.id}
-              className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 text-xs flex flex-col md:flex-row md:items-center justify-between gap-3 transition-colors hover:border-zinc-700"
+              className={`p-3.5 rounded-2xl bg-zinc-950 border text-xs flex flex-col md:flex-row md:items-center justify-between gap-3 transition-colors ${
+                tx.status === 'Cancelled' || tx.status === 'Reversed'
+                  ? 'border-zinc-850 opacity-80 bg-zinc-950/50'
+                  : 'border-zinc-800 hover:border-zinc-700'
+              }`}
             >
-              {/* Left Column: Type, Status, Date, ID, Notes */}
+              {/* Left Column: Type, Status, Date, ID, Notes, Audit trails */}
               <div className="space-y-1.5 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   {getTypeBadge(tx.type)}
-                  {getStatusBadge(tx.status, tx.type)}
+                  {getStatusBadge(tx.status, tx.type, tx.newIntendedAmount)}
 
                   {isCleared && (
                     <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase bg-emerald-950/80 text-emerald-400 border border-emerald-500/40 flex items-center gap-1">
@@ -162,6 +221,11 @@ export const BalanceLedgerView: React.FC<BalanceLedgerViewProps> = ({
                       Payout Req: <span className="text-white font-bold">#{tx.relatedBalanceRequestId}</span>
                     </span>
                   )}
+                  {tx.relatedTransactionId && (
+                    <span className="text-zinc-400 font-mono text-[10px]">
+                      Ref: <span className="text-zinc-300">#{tx.relatedTransactionId}</span>
+                    </span>
+                  )}
                 </div>
 
                 {tx.notes && (
@@ -169,14 +233,36 @@ export const BalanceLedgerView: React.FC<BalanceLedgerViewProps> = ({
                     Note: "{tx.notes}"
                   </p>
                 )}
+
+                {/* Audit metadata details */}
+                {tx.cancelledAt && (
+                  <p className="text-[10px] text-rose-400 font-medium">
+                    Cancelled by {tx.cancelledBy || 'ADMIN'} on{' '}
+                    {new Date(tx.cancelledAt).toLocaleDateString('en-IN')}: "{tx.cancelReason || 'Cancelled'}"
+                  </p>
+                )}
+                {tx.reversedAt && (
+                  <p className="text-[10px] text-amber-400 font-medium">
+                    Reversed by {tx.reversedBy || 'ADMIN'} on{' '}
+                    {new Date(tx.reversedAt).toLocaleDateString('en-IN')}: "{tx.reversalReason || 'Reversed'}"
+                  </p>
+                )}
+                {tx.correctedAt && (
+                  <p className="text-[10px] text-blue-400 font-medium">
+                    Corrected by {tx.correctedBy || 'ADMIN'} on{' '}
+                    {new Date(tx.correctedAt).toLocaleDateString('en-IN')}: "{tx.correctionReason || 'Corrected'}"
+                  </p>
+                )}
               </div>
 
-              {/* Right Column: Amount & Balance Progression */}
-              <div className="flex items-center justify-between md:justify-end gap-4 pt-2 md:pt-0 border-t md:border-t-0 border-zinc-800">
+              {/* Right Column: Amount & Actions */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between md:justify-end gap-3 pt-2 md:pt-0 border-t md:border-t-0 border-zinc-800">
                 <div className="text-left md:text-right">
                   <span
                     className={`text-sm font-extrabold block ${
-                      isCredit
+                      tx.status === 'Cancelled'
+                        ? 'text-zinc-500 line-through'
+                        : isCredit
                         ? 'text-amber-400'
                         : isDebit
                         ? 'text-emerald-400'
@@ -209,6 +295,50 @@ export const BalanceLedgerView: React.FC<BalanceLedgerViewProps> = ({
                     )}
                   </div>
                 </div>
+
+                {/* Admin Management Actions for Admin-created credits */}
+                {isReversible && (
+                  <div className="flex items-center gap-1.5 self-start sm:self-auto shrink-0 flex-wrap">
+                    {onEditTransaction && (
+                      <button
+                        type="button"
+                        onClick={() => onEditTransaction(tx)}
+                        className="py-1 px-2 bg-blue-500/15 hover:bg-blue-600 text-blue-300 hover:text-white rounded-lg text-[10px] font-bold border border-blue-500/30 flex items-center gap-1 transition-all"
+                        title="Edit / Correct intended credit amount"
+                        id={`btn-edit-credit-${tx.id}`}
+                      >
+                        <Edit3 className="w-3 h-3" />
+                        <span>Edit</span>
+                      </button>
+                    )}
+
+                    {onReverseTransaction && (
+                      <button
+                        type="button"
+                        onClick={() => onReverseTransaction(tx)}
+                        className="py-1 px-2 bg-amber-500/15 hover:bg-amber-600 text-amber-300 hover:text-white rounded-lg text-[10px] font-bold border border-amber-500/30 flex items-center gap-1 transition-all"
+                        title="Reverse balance credit"
+                        id={`btn-reverse-credit-${tx.id}`}
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Reverse</span>
+                      </button>
+                    )}
+
+                    {onCancelTransaction && (
+                      <button
+                        type="button"
+                        onClick={() => onCancelTransaction(tx)}
+                        className="py-1 px-2 bg-rose-500/15 hover:bg-rose-600 text-rose-300 hover:text-white rounded-lg text-[10px] font-bold border border-rose-500/30 flex items-center gap-1 transition-all"
+                        title="Cancel this balance credit"
+                        id={`btn-cancel-credit-${tx.id}`}
+                      >
+                        <Ban className="w-3 h-3" />
+                        <span>Cancel</span>
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           );
