@@ -46,6 +46,8 @@ import {
   TrendingDown,
   Ban,
   ArrowRight,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { BalanceLedgerView } from './BalanceLedgerView';
 import { RequestMoneyModal } from './RequestMoneyModal';
@@ -73,6 +75,7 @@ export const UserPortal: React.FC = () => {
     updateUserProfile,
     userCancelRequest,
     userEditRequest,
+    setupInitialPasswordForExistingUser,
     getUserBalanceInfo,
     showToast,
   } = useApp();
@@ -86,6 +89,14 @@ export const UserPortal: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [rejectedSearchQuery, setRejectedSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
+
+  // Existing user password migration state (Section 3)
+  const [migNewPassword, setMigNewPassword] = useState('');
+  const [migConfirmPassword, setMigConfirmPassword] = useState('');
+  const [migShowPassword, setMigShowPassword] = useState(false);
+  const [migShowConfirmPassword, setMigShowConfirmPassword] = useState(false);
+  const [migError, setMigError] = useState<string | null>(null);
+  const [isSubmittingMigPassword, setIsSubmittingMigPassword] = useState(false);
 
   // Unread balance added notifications for real-time and offline popup notification
   const unreadBalanceAddedNotifs = notifications.filter(
@@ -1756,6 +1767,143 @@ export const UserPortal: React.FC = () => {
           </div>
         )}
       </AnimatePresence>
+
+      {/* SECTION 3: One-time "Secure Your DIGIZORT Account" modal for existing accounts without password */}
+      {currentUser && !currentUser.hasPassword && !currentUser.passwordHash && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-zinc-950/90 backdrop-blur-xl">
+          <div className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-3xl p-6 sm:p-8 space-y-5 shadow-2xl relative">
+            <div className="text-center space-y-2">
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-500/20 to-rose-500/20 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto">
+                <ShieldCheck className="w-6 h-6 text-amber-400" />
+              </div>
+              <h3 className="text-xl font-extrabold text-white">Secure Your DIGIZORT Account</h3>
+              <p className="text-xs text-zinc-300 leading-relaxed">
+                Your DIGIZORT account has been upgraded with secure password protection. Please create a password to continue using your account.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-zinc-950/70 border border-zinc-800 text-xs text-zinc-400 space-y-1">
+              <div className="flex justify-between">
+                <span>Account Name:</span>
+                <span className="font-bold text-white">{currentUser.fullName}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Registered Mobile:</span>
+                <span className="font-bold text-white">{currentUser.mobileNumber}</span>
+              </div>
+              <p className="text-[11px] text-emerald-400 pt-1 border-t border-zinc-850">
+                ✓ All your orders, balance, history, and notifications remain completely preserved.
+              </p>
+            </div>
+
+            {migError && (
+              <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{migError}</span>
+              </div>
+            )}
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setMigError(null);
+                if (migNewPassword.length < 8) {
+                  setMigError('Password must be at least 8 characters long.');
+                  return;
+                }
+                if (migNewPassword !== migConfirmPassword) {
+                  setMigError('Password and Confirm Password must match.');
+                  return;
+                }
+                try {
+                  setIsSubmittingMigPassword(true);
+                  await setupInitialPasswordForExistingUser(currentUser.mobileNumber, migNewPassword);
+                } catch (err: any) {
+                  setMigError(err.message || 'Failed to update password.');
+                } finally {
+                  setIsSubmittingMigPassword(false);
+                }
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="block text-xs font-bold text-zinc-300 mb-1">
+                  New Password <span className="text-rose-400">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={migShowPassword ? 'text' : 'password'}
+                    required
+                    placeholder="Enter new password (min. 8 characters)"
+                    value={migNewPassword}
+                    onChange={(e) => setMigNewPassword(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-3.5 pr-10 py-2.5 text-white text-xs focus:outline-none focus:border-[#E53935]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setMigShowPassword(!migShowPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                  >
+                    {migShowPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-zinc-300 mb-1">
+                  Confirm Password <span className="text-rose-400">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={migShowConfirmPassword ? 'text' : 'password'}
+                    required
+                    placeholder="Re-enter password to confirm"
+                    value={migConfirmPassword}
+                    onChange={(e) => setMigConfirmPassword(e.target.value)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-xl pl-3.5 pr-10 py-2.5 text-white text-xs focus:outline-none focus:border-[#E53935]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setMigShowConfirmPassword(!migShowConfirmPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300"
+                  >
+                    {migShowConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="text-[11px] space-y-1">
+                <div className={`flex items-center gap-1.5 ${migNewPassword.length >= 8 ? 'text-emerald-400 font-bold' : 'text-zinc-500'}`}>
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Minimum 8 characters</span>
+                </div>
+                {migConfirmPassword && (
+                  <div className={`flex items-center gap-1.5 ${migNewPassword === migConfirmPassword ? 'text-emerald-400 font-bold' : 'text-rose-400'}`}>
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>{migNewPassword === migConfirmPassword ? 'Passwords match' : 'Passwords do not match'}</span>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSubmittingMigPassword || migNewPassword.length < 8 || migNewPassword !== migConfirmPassword}
+                className="w-full py-3 px-4 bg-gradient-to-r from-emerald-600 to-teal-600 hover:brightness-110 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-lg shadow-emerald-600/25 flex items-center justify-center gap-2 transition-all"
+                id="btn-portal-set-password"
+              >
+                {isSubmittingMigPassword ? (
+                  <span>Securing Account...</span>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Set Password &amp; Continue</span>
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

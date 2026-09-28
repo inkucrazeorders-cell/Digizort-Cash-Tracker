@@ -201,3 +201,71 @@ export async function fetchWhatsAppConfigStatus(): Promise<{
     return { configured: false, hasToken: false, hasPhoneId: false };
   }
 }
+
+/**
+ * Formats the official DIGIZORT WhatsApp Welcome message with password security notice.
+ * NEVER includes plaintext passwords.
+ */
+export function formatWelcomeAuthWhatsAppMessage(params: {
+  customerName: string;
+  mobileNumber: string;
+  userId: string;
+}): string {
+  return `DIGIZORT
+
+Welcome to DIGIZORT, ${params.customerName}! 👋
+
+Your DIGIZORT account has been successfully secured with password login.
+
+Account Details:
+━━━━━━━━━━━━━━
+Name: ${params.customerName}
+Mobile: ${params.mobileNumber}
+Account ID: ${params.userId}
+━━━━━━━━━━━━━━
+
+You can now securely access your DIGIZORT User Portal using your registered mobile number and password.
+
+🔐 Password: For your security, your password is never displayed or sent through WhatsApp.
+
+If you forgot your password, use the "Forgot Password?" option on the DIGIZORT login page.
+
+Thank you for using DIGIZORT.
+
+Make world with amazing technology.
+
+— DIGIZORT Team`;
+}
+
+/**
+ * Formats the official DIGIZORT WhatsApp Security Upgrade message for existing users.
+ * NEVER includes plaintext passwords.
+ */
+export function formatPasswordUpgradedWhatsAppMessage(params: {
+  customerName: string;
+  mobileNumber: string;
+  userId: string;
+}): string {
+  return `DIGIZORT
+
+Hello ${params.customerName}! 👋
+
+Your DIGIZORT account security has been successfully upgraded.
+
+Your account now uses secure password login.
+
+Account:
+Name: ${params.customerName}
+Mobile: ${params.mobileNumber}
+Account ID: ${params.userId}
+
+🔐 Your password is private and is not displayed or sent by DIGIZORT.
+
+Please keep your password secure and do not share it with anyone.
+
+You can use "Forgot Password?" on the login page if you ever need to reset it.
+
+Welcome to the upgraded DIGIZORT experience.
+
+— DIGIZORT Team`;
+}

@@ -31,6 +31,11 @@ import { AdminSupportDeskView } from './AdminSupportDeskView';
 import { AdminAnnouncementsView } from './AdminAnnouncementsView';
 import { pushManager, NotificationPermissionState } from '../lib/pushNotifications';
 import {
+  formatWelcomeAuthWhatsAppMessage,
+  formatPasswordUpgradedWhatsAppMessage,
+  sendWhatsAppViaServer,
+} from '../lib/whatsapp';
+import {
   ShieldCheck,
   ShoppingBag,
   Users,
@@ -66,6 +71,12 @@ import {
   UserPlus,
   HelpCircle,
   Megaphone,
+  KeyRound,
+  Copy,
+  Send,
+  MessageCircle,
+  RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
 
 export const AdminPanel: React.FC = () => {
@@ -88,6 +99,7 @@ export const AdminPanel: React.FC = () => {
     adminSuspendUser,
     adminUnsuspendUser,
     adminDeleteUser,
+    adminResetUserPassword,
     adminProcessGroupPayment,
     getUserBalanceInfo,
     showToast,
@@ -111,6 +123,16 @@ export const AdminPanel: React.FC = () => {
 
   // Admin Notification Bell Dropdown State
   const [showAdminNotifs, setShowAdminNotifs] = useState(false);
+
+  // Authentication WhatsApp Preview Modal State (Sections 7, 8, 9)
+  const [authWhatsAppPreview, setAuthWhatsAppPreview] = useState<{
+    recipientName: string;
+    recipientMobile: string;
+    userId: string;
+    messageType: 'welcome' | 'upgrade';
+    message: string;
+  } | null>(null);
+  const [isSendingAuthWhatsApp, setIsSendingAuthWhatsApp] = useState(false);
 
   // Dedicated Customer Balance Management Action Modal State (inside Manage Customers)
   const [customerBalActionUser, setCustomerBalActionUser] = useState<AppUser | null>(null);
@@ -2458,6 +2480,148 @@ export const AdminPanel: React.FC = () => {
                       <span>Batch Settle in Payment Grouping</span>
                     </button>
                   )}
+                </div>
+              </div>
+
+              {/* SECTION 6: User Authentication & Security Details */}
+              <div className="p-4 sm:p-5 rounded-2xl bg-zinc-950/80 border border-zinc-800 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-850 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-xl bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                      <KeyRound className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                        Authentication &amp; Account Security
+                      </h4>
+                      <p className="text-[11px] text-zinc-400">
+                        Cryptographic credential status &amp; customer communication controls
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Actions: Reset Password & WhatsApp Messages (Sections 6, 7, 8) */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const msg = formatWelcomeAuthWhatsAppMessage({
+                          customerName: selectedUserDetail.fullName,
+                          mobileNumber: selectedUserDetail.mobileNumber,
+                          userId: selectedUserDetail.id,
+                        });
+                        setAuthWhatsAppPreview({
+                          recipientName: selectedUserDetail.fullName,
+                          recipientMobile: selectedUserDetail.mobileNumber,
+                          userId: selectedUserDetail.id,
+                          messageType: 'welcome',
+                          message: msg,
+                        });
+                      }}
+                      className="py-1.5 px-3 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/30 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all"
+                      title="Send Welcome WhatsApp message"
+                      id="btn-admin-send-whatsapp-welcome"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Send WhatsApp</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const msg = formatPasswordUpgradedWhatsAppMessage({
+                          customerName: selectedUserDetail.fullName,
+                          mobileNumber: selectedUserDetail.mobileNumber,
+                          userId: selectedUserDetail.id,
+                        });
+                        setAuthWhatsAppPreview({
+                          recipientName: selectedUserDetail.fullName,
+                          recipientMobile: selectedUserDetail.mobileNumber,
+                          userId: selectedUserDetail.id,
+                          messageType: 'upgrade',
+                          message: msg,
+                        });
+                      }}
+                      className="py-1.5 px-3 bg-blue-600/20 hover:bg-blue-600 text-blue-300 hover:text-white border border-blue-500/30 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all"
+                      title="Send Security Upgrade WhatsApp message"
+                      id="btn-admin-send-whatsapp-upgrade"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
+                      <span>Upgrade Notice</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (confirm(`Reset password for ${selectedUserDetail.fullName}? The customer will create a new password on their next login.`)) {
+                          await adminResetUserPassword(selectedUserDetail.id);
+                          setSelectedUserDetail({
+                            ...selectedUserDetail,
+                            hasPassword: false,
+                            passwordHash: '',
+                          });
+                        }
+                      }}
+                      className="py-1.5 px-3 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/30 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all"
+                      id="btn-admin-reset-user-password"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Reset Password</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                  <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                    <span className="text-[10px] text-zinc-500 font-bold uppercase block mb-0.5">Account ID / User ID</span>
+                    <span className="font-mono font-bold text-white text-[11px] block truncate">#{selectedUserDetail.id}</span>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                    <span className="text-[10px] text-zinc-500 font-bold uppercase block mb-0.5">Registered Mobile</span>
+                    <span className="font-bold text-white text-xs block">{selectedUserDetail.mobileNumber}</span>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                    <span className="text-[10px] text-zinc-500 font-bold uppercase block mb-0.5">Email Address</span>
+                    <span className="font-medium text-zinc-300 text-xs block truncate">{selectedUserDetail.email || 'Not provided'}</span>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                    <span className="text-[10px] text-zinc-500 font-bold uppercase block mb-0.5">Registration Date</span>
+                    <span className="font-medium text-zinc-300 text-xs block">
+                      {selectedUserDetail.createdAt ? new Date(selectedUserDetail.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A'}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                    <span className="text-[10px] text-zinc-500 font-bold uppercase block mb-0.5">Last Login</span>
+                    <span className="font-medium text-zinc-300 text-xs block">
+                      {selectedUserDetail.lastLoginAt ? new Date(selectedUserDetail.lastLoginAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) : 'Never'}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
+                    <span className="text-[10px] text-zinc-500 font-bold uppercase block mb-0.5">Password Status</span>
+                    {selectedUserDetail.hasPassword || selectedUserDetail.passwordHash ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                        Password Set
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        <AlertCircle className="w-3 h-3 text-amber-400" />
+                        Password Not Set
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-zinc-900/40 border border-zinc-850 flex items-start gap-2.5 text-[11px] text-zinc-400">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Cryptographic Protection:</strong> User passwords are cryptographically salted and hashed using PBKDF2 (SHA-256). Plaintext passwords are never stored in the database or visible to administrators.
+                  </span>
                 </div>
               </div>
 

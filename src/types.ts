@@ -254,6 +254,10 @@ export interface AppUser {
   createdAt: string;
   lastLoginAt?: string;
   pin?: string;
+  passwordHash?: string;
+  passwordSalt?: string;
+  hasPassword?: boolean;
+  passwordUpdatedAt?: string;
   creditBalance?: number;
   preferredLanguage?: string;
   notificationPreferences?: {

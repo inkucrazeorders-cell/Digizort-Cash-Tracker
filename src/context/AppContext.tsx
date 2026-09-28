@@ -53,6 +53,14 @@ import {
   formatSubmissionWhatsAppMessage,
   sendWhatsAppViaServer,
 } from '../lib/whatsapp';
+import {
+  hashPassword,
+  verifyPassword,
+  validatePassword,
+  checkLoginRateLimit,
+  recordFailedLogin,
+  clearLoginRateLimit,
+} from '../lib/authSecurity';
 
 interface AppContextType {
   currentUser: AppUser | null;
@@ -66,10 +74,14 @@ interface AppContextType {
   balanceTransactions: BalanceTransaction[];
   settings: UserSettings;
 
-  // Mobile Auth
+  // Mobile Auth & Password Security
   checkMobileRegistered: (mobileNumber: string) => Promise<AppUser | null>;
-  registerUser: (userData: Omit<AppUser, 'id' | 'createdAt' | 'status' | 'role'>) => Promise<AppUser>;
+  registerUser: (userData: Omit<AppUser, 'id' | 'createdAt' | 'status' | 'role'> & { password?: string }) => Promise<AppUser>;
   loginWithMobile: (mobileNumber: string, pin?: string) => Promise<void>;
+  loginWithPassword: (mobileNumber: string, password: string) => Promise<{ requiresPasswordSetup?: boolean; user?: AppUser }>;
+  setupInitialPasswordForExistingUser: (mobileNumber: string, newPassword: string) => Promise<AppUser>;
+  resetPassword: (params: { mobileNumber: string; newPassword: string }) => Promise<void>;
+  adminResetUserPassword: (userId: string) => Promise<void>;
   loginAsAdmin: (adminCode: string) => Promise<boolean>;
   logoutUser: () => Promise<void>;
 
@@ -764,7 +776,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return getUserAvailableBalance(userMobile, userId, balanceTransactions, userReqs, userGps, balanceRequests);
   };
 
-  // MOBILE AUTH FUNCTIONS
+  // MOBILE & PASSWORD AUTH FUNCTIONS
   const checkMobileRegistered = async (mobileNumber: string): Promise<AppUser | null> => {
     const cleanNum = mobileNumber.trim();
     const docRef = doc(db, 'app_users', cleanNum);
@@ -776,10 +788,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const registerUser = async (
-    userData: Omit<AppUser, 'id' | 'createdAt' | 'status' | 'role'>
+    userData: Omit<AppUser, 'id' | 'createdAt' | 'status' | 'role'> & { password?: string }
   ): Promise<AppUser> => {
     const cleanNum = userData.mobileNumber.trim();
     const nowIso = new Date().toISOString();
+
+    let passwordHash = '';
+    let passwordSalt = '';
+    let hasPassword = false;
+
+    if (userData.password) {
+      const val = validatePassword(userData.password);
+      if (!val.valid) {
+        throw new Error(val.message || 'Password does not meet requirements.');
+      }
+      const hashed = await hashPassword(userData.password);
+      passwordHash = hashed.hash;
+      passwordSalt = hashed.salt;
+      hasPassword = true;
+    }
+
     const rawUser: AppUser = {
       id: cleanNum,
       fullName: userData.fullName.trim(),
@@ -790,7 +818,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'active',
       role: 'user',
       createdAt: nowIso,
+      lastLoginAt: nowIso,
       creditBalance: 0,
+      passwordHash,
+      passwordSalt,
+      hasPassword,
+      passwordUpdatedAt: hasPassword ? nowIso : '',
     };
 
     const newUser = sanitizeForFirestore(rawUser);
@@ -817,6 +850,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     await batch.commit();
 
+    clearLoginRateLimit(cleanNum);
     setCurrentUser(newUser);
     setIsAdmin(false);
     setAppMode('user_portal');
@@ -837,6 +871,192 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return newUser;
+  };
+
+  const loginWithPassword = async (
+    mobileNumber: string,
+    passwordCandidate: string
+  ): Promise<{ requiresPasswordSetup?: boolean; user?: AppUser }> => {
+    const cleanNum = mobileNumber.trim();
+
+    // Check rate limit to prevent brute force
+    const rateLimit = checkLoginRateLimit(cleanNum);
+    if (rateLimit.isLocked) {
+      throw new Error(
+        `Too many failed login attempts. Account temporarily locked for security. Please try again in ${rateLimit.remainingSeconds} seconds.`
+      );
+    }
+
+    const user = await checkMobileRegistered(cleanNum);
+    if (!user) {
+      recordFailedLogin(cleanNum);
+      // Generalized error to prevent user enumeration
+      throw new Error('Invalid mobile number or password.');
+    }
+
+    if (user.status === 'suspended') {
+      throw new Error('This account has been suspended by Admin. Please contact support.');
+    }
+
+    // Existing user migration check: User registered under old phone-only system without a password
+    if (!user.passwordHash || !user.hasPassword) {
+      return { requiresPasswordSetup: true, user };
+    }
+
+    // Verify password hash
+    const isValid = await verifyPassword(
+      passwordCandidate,
+      user.passwordHash,
+      user.passwordSalt || ''
+    );
+
+    if (!isValid) {
+      const failed = recordFailedLogin(cleanNum);
+      if (failed.isLocked) {
+        throw new Error(
+          `Too many failed login attempts. Account temporarily locked for security. Please try again in ${failed.remainingSeconds} seconds.`
+        );
+      }
+      throw new Error('Incorrect password. Please try again.');
+    }
+
+    // Clear rate limits on successful authentication
+    clearLoginRateLimit(cleanNum);
+
+    // Update last login timestamp
+    const nowIso = new Date().toISOString();
+    const updated = { ...user, lastLoginAt: nowIso };
+    await updateDoc(doc(db, 'app_users', cleanNum), { lastLoginAt: nowIso });
+
+    setCurrentUser(updated);
+    setIsAdmin(false);
+    setAppMode('user_portal');
+
+    // Persist authenticated session
+    try {
+      localStorage.setItem(
+        STORAGE_SESSION_KEY,
+        JSON.stringify({
+          isAdmin: false,
+          userId: updated.id,
+          userMobile: updated.mobileNumber,
+          loginTimestamp: Date.now(),
+        })
+      );
+    } catch (e) {
+      console.warn('[Session] Could not store persistent session:', e);
+    }
+
+    showToast(`Welcome back, ${user.fullName}!`);
+    return { user: updated };
+  };
+
+  const setupInitialPasswordForExistingUser = async (
+    mobileNumber: string,
+    newPassword: string
+  ): Promise<AppUser> => {
+    const cleanNum = mobileNumber.trim();
+    const val = validatePassword(newPassword);
+    if (!val.valid) {
+      throw new Error(val.message || 'Password does not meet requirements.');
+    }
+
+    const user = await checkMobileRegistered(cleanNum);
+    if (!user) {
+      throw new Error('User account not found.');
+    }
+
+    const { hash, salt } = await hashPassword(newPassword);
+    const nowIso = new Date().toISOString();
+
+    const updatePayload = {
+      passwordHash: hash,
+      passwordSalt: salt,
+      hasPassword: true,
+      passwordUpdatedAt: nowIso,
+      lastLoginAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    await updateDoc(doc(db, 'app_users', cleanNum), sanitizeForFirestore(updatePayload));
+
+    // Preserve all existing requests, balance, profile info
+    const updatedUser: AppUser = {
+      ...user,
+      ...updatePayload,
+    };
+
+    clearLoginRateLimit(cleanNum);
+    setCurrentUser(updatedUser);
+    setIsAdmin(false);
+    setAppMode('user_portal');
+
+    try {
+      localStorage.setItem(
+        STORAGE_SESSION_KEY,
+        JSON.stringify({
+          isAdmin: false,
+          userId: updatedUser.id,
+          userMobile: updatedUser.mobileNumber,
+          loginTimestamp: Date.now(),
+        })
+      );
+    } catch (e) {
+      console.warn('[Session] Could not store persistent session:', e);
+    }
+
+    showToast('Your account is now secured with password protection. Welcome!');
+    return updatedUser;
+  };
+
+  const resetPassword = async (params: {
+    mobileNumber: string;
+    newPassword: string;
+  }): Promise<void> => {
+    const cleanNum = params.mobileNumber.trim();
+    const val = validatePassword(params.newPassword);
+    if (!val.valid) {
+      throw new Error(val.message || 'Password does not meet requirements.');
+    }
+
+    const user = await checkMobileRegistered(cleanNum);
+    if (!user) {
+      // Avoid enumeration
+      throw new Error('Password reset could not be completed for this number.');
+    }
+
+    const { hash, salt } = await hashPassword(params.newPassword);
+    const nowIso = new Date().toISOString();
+
+    await updateDoc(
+      doc(db, 'app_users', cleanNum),
+      sanitizeForFirestore({
+        passwordHash: hash,
+        passwordSalt: salt,
+        hasPassword: true,
+        passwordUpdatedAt: nowIso,
+        updatedAt: nowIso,
+      })
+    );
+
+    clearLoginRateLimit(cleanNum);
+    showToast('Password reset successfully. You can now login with your new password.');
+  };
+
+  const adminResetUserPassword = async (userId: string) => {
+    enforceAdminAccess();
+    const nowIso = new Date().toISOString();
+    await updateDoc(
+      doc(db, 'app_users', userId),
+      sanitizeForFirestore({
+        passwordHash: '',
+        passwordSalt: '',
+        hasPassword: false,
+        passwordUpdatedAt: nowIso,
+        updatedAt: nowIso,
+      })
+    );
+    showToast('Customer password reset. They will create a new password on their next login.');
   };
 
   const loginWithMobile = async (mobileNumber: string, pin?: string) => {
@@ -3981,6 +4201,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         checkMobileRegistered,
         registerUser,
         loginWithMobile,
+        loginWithPassword,
+        setupInitialPasswordForExistingUser,
+        resetPassword,
+        adminResetUserPassword,
         loginAsAdmin,
         logoutUser,
         submitNewRequest,
