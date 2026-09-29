@@ -59,6 +59,7 @@ import { HelpSupportView } from './HelpSupportView';
 import { UserAnnouncementsView } from './UserAnnouncementsView';
 import { PaymentVerificationModal } from './PaymentVerificationModal';
 import { PaymentVerificationSection } from './PaymentVerificationSection';
+import { useProactiveAI } from '../context/ProactiveAIContext';
 
 export const UserPortal: React.FC = () => {
   const {
@@ -81,6 +82,8 @@ export const UserPortal: React.FC = () => {
     getUserBalanceInfo,
     showToast,
   } = useApp();
+
+  const { setPageContext, recordFailedAction } = useProactiveAI();
 
   const [activeTab, setActiveTab] = useState<'requests' | 'timeline' | 'documents' | 'notifications' | 'announcements' | 'profile' | 'balance' | 'rejected' | 'support'>('requests');
   const [isNewRequestOpen, setIsNewRequestOpen] = useState(false);
@@ -122,6 +125,29 @@ export const UserPortal: React.FC = () => {
   const [isPushBannerDismissed, setIsPushBannerDismissed] = useState(() => {
     return localStorage.getItem('digizort_push_banner_dismissed') === 'true';
   });
+
+  // Track user interface context for proactive AI assistance (Sections 1, 2, 5)
+  React.useEffect(() => {
+    if (payVerificationReq) {
+      setPageContext('payment_verification', undefined, payVerificationReq.id);
+    } else if (payWithBalanceReq) {
+      setPageContext('balance', 'pay_with_balance', payWithBalanceReq.id);
+    } else if (isNewRequestOpen) {
+      setPageContext('new_request');
+    } else if (activeTab === 'requests') {
+      setPageContext('requests');
+    } else if (activeTab === 'balance') {
+      setPageContext('balance');
+    } else if (activeTab === 'profile') {
+      setPageContext('profile');
+    } else if (activeTab === 'support') {
+      setPageContext('support');
+    } else if (activeTab === 'announcements') {
+      setPageContext('announcements');
+    } else {
+      setPageContext('general');
+    }
+  }, [activeTab, isNewRequestOpen, payVerificationReq, payWithBalanceReq, setPageContext]);
 
   if (!currentUser) return null;
 

@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '../context/AppContext';
+import { useProactiveAI } from '../context/ProactiveAIContext';
 import { processImageUpload, sanitizeInput } from '../lib/profileAndSupport';
 import {
   User,
@@ -18,10 +19,12 @@ import {
   X,
   AlertCircle,
   Sparkles,
+  Bot,
 } from 'lucide-react';
 
 export const UserProfileView: React.FC = () => {
   const { currentUser, updateUserProfile, showToast } = useApp();
+  const { userProactiveEnabled, setUserProactiveEnabled } = useProactiveAI();
 
   const [activeSubTab, setActiveSubTab] = useState<'view' | 'edit' | 'security'>('view');
 
@@ -351,6 +354,59 @@ export const UserProfileView: React.FC = () => {
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
                   <span>Configured specifically for your account communications.</span>
                 </div>
+              </div>
+            </div>
+
+            {/* DIGIZORT Proactive AI Assistant Preference (Prompt Section 1, 3, 4) */}
+            <div className="p-5 rounded-3xl bg-zinc-900/80 border border-zinc-800 space-y-3.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    <Bot className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-extrabold uppercase tracking-wider text-white flex items-center gap-1.5">
+                      <span>Proactive AI Assistance</span>
+                      <Sparkles className="w-3 h-3 text-amber-400" />
+                    </h3>
+                    <p className="text-[11px] text-zinc-400">
+                      Shows gentle contextual assistance when you appear stuck on requests or payments
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextVal = !userProactiveEnabled;
+                    setUserProactiveEnabled(nextVal);
+                    showToast(nextVal ? 'Proactive AI guidance enabled' : 'Proactive AI guidance muted');
+                  }}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    userProactiveEnabled ? 'bg-amber-500' : 'bg-zinc-800'
+                  }`}
+                  id="toggle-proactive-ai-user"
+                  title="Toggle Proactive AI Help"
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      userProactiveEnabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-zinc-950 border border-zinc-800 text-[11px] text-zinc-400 flex items-center justify-between">
+                <span>Current Status</span>
+                <span
+                  className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${
+                    userProactiveEnabled
+                      ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                      : 'bg-zinc-800 text-zinc-500 border border-zinc-700'
+                  }`}
+                >
+                  {userProactiveEnabled ? 'Active & Helpful' : 'Quiet Mode (Turned Off)'}
+                </span>
               </div>
             </div>
           </div>

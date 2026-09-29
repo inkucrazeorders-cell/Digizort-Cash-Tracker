@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../context/AppContext';
+import { useProactiveAI } from '../context/ProactiveAIContext';
 import { RequestType } from '../types';
 import { X, PlusCircle, ShoppingBag, Link, DollarSign, FileText, Send, Coins, Wallet, CreditCard, CheckCircle2, AlertCircle } from 'lucide-react';
 
@@ -22,6 +23,7 @@ const REQUEST_TYPES: RequestType[] = [
 
 export const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClose, initialUseBalance = false }) => {
   const { submitNewRequest, settings, currentUser, getUserBalanceInfo } = useApp();
+  const { setPageContext, recordValidationError, recordFailedAction, resetStepTimer } = useProactiveAI();
 
   const [requestType, setRequestType] = useState<RequestType>('Product Purchase');
   const [productName, setProductName] = useState('');
@@ -33,6 +35,13 @@ export const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClos
   const [paymentMode, setPaymentMode] = useState<'full_balance' | 'partial_balance' | 'external'>('external');
   const [customBalanceAmount, setCustomBalanceAmount] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Synchronize proactive AI context when modal opens or payment mode changes
+  useEffect(() => {
+    if (isOpen) {
+      setPageContext('new_request', paymentMode);
+    }
+  }, [isOpen, paymentMode, setPageContext]);
 
   const userBalInfo = getUserBalanceInfo(currentUser?.mobileNumber || '', currentUser?.id);
   const availableBalance = userBalInfo.availableBalance;
@@ -97,13 +106,19 @@ export const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClos
     e.preventDefault();
     setErrorMsg(null);
 
-    if (!productName.trim() || !purpose.trim() || !expectedPrice) return;
+    if (!productName.trim() || !purpose.trim() || !expectedPrice) {
+      recordValidationError('Missing required order details (Name, Purpose, or Expected Price)');
+      setErrorMsg('Please fill in all required fields (Product Name, Purpose, and Expected Price).');
+      return;
+    }
     if (numPrice <= 0) {
+      recordValidationError('Invalid price entered');
       setErrorMsg('Please enter a valid expected price greater than 0.');
       return;
     }
 
     if (effectiveBalanceUsed > availableBalance) {
+      recordValidationError('Entered balance exceeds available balance');
       setErrorMsg(`Balance used cannot exceed your available balance of ${settings.currencySymbol}${availableBalance}.`);
       return;
     }
@@ -122,6 +137,7 @@ export const NewRequestModal: React.FC<NewRequestModalProps> = ({ isOpen, onClos
       onClose();
     } catch (err: any) {
       console.error(err);
+      recordValidationError(err?.message || 'Failed to submit request');
       setErrorMsg(err?.message || 'Failed to submit request.');
     } finally {
       setIsSubmitting(false);

@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { OrderRequest, PaymentVerificationMethod } from '../types';
 import { useApp } from '../context/AppContext';
+import { useProactiveAI } from '../context/ProactiveAIContext';
 import { getRequestRemaining, getRequestPrice } from '../lib/calculations';
 import {
   X,
@@ -30,6 +31,7 @@ export const PaymentVerificationModal: React.FC<PaymentVerificationModalProps> =
   request,
 }) => {
   const { userSubmitPaymentVerification, settings, showToast } = useApp();
+  const { setPageContext, recordValidationError } = useProactiveAI();
 
   const remainingDue = getRequestRemaining(request);
   const totalPrice = getRequestPrice(request);
@@ -43,6 +45,13 @@ export const PaymentVerificationModal: React.FC<PaymentVerificationModalProps> =
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Synchronize proactive AI context when modal is active
+  useEffect(() => {
+    if (isOpen) {
+      setPageContext('payment_verification', paymentMethod, request.id);
+    }
+  }, [isOpen, paymentMethod, request.id, setPageContext]);
+
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -51,11 +60,13 @@ export const PaymentVerificationModal: React.FC<PaymentVerificationModalProps> =
 
     const amountNum = parseFloat(amountPaid);
     if (isNaN(amountNum) || amountNum <= 0) {
+      recordValidationError('Payment amount must be greater than zero');
       setErrorMessage('Please enter a valid amount paid greater than 0.');
       return;
     }
 
     if (amountNum > remainingDue) {
+      recordValidationError('Payment amount exceeds remaining due');
       setErrorMessage(
         `Amount entered (${settings.currencySymbol}${amountNum.toLocaleString('en-IN')}) cannot exceed the amount due (${settings.currencySymbol}${remainingDue.toLocaleString('en-IN')}).`
       );
@@ -63,11 +74,13 @@ export const PaymentVerificationModal: React.FC<PaymentVerificationModalProps> =
     }
 
     if (paymentMethod === 'Other' && !customMethod.trim()) {
+      recordValidationError('Missing custom payment method name');
       setErrorMessage('Please enter the name of the payment method.');
       return;
     }
 
     if ((paymentMethod === 'UPI' || paymentMethod === 'Bank Transfer') && !transactionId.trim()) {
+      recordValidationError(`Missing ${paymentMethod === 'UPI' ? 'UTR / Transaction ID' : 'Reference ID'}`);
       setErrorMessage(
         `Please provide the ${paymentMethod === 'UPI' ? 'UTR / Transaction ID' : 'Transaction Reference / UTR'} so our team can verify your payment.`
       );
@@ -88,6 +101,7 @@ export const PaymentVerificationModal: React.FC<PaymentVerificationModalProps> =
 
       onClose();
     } catch (err: any) {
+      recordValidationError(err?.message || 'Verification submission error');
       setErrorMessage(err?.message || 'Failed to submit payment verification request.');
     } finally {
       setIsSubmitting(false);

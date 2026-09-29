@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useProactiveAI } from '../context/ProactiveAIContext';
 import {
   Sparkles,
   Mic,
@@ -74,6 +75,13 @@ export const GeminiAssistantModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
 }> = ({ isOpen, onClose }) => {
+  const {
+    assistantInitialTab,
+    assistantInitialMessage,
+    setRobotState,
+    promptState,
+  } = useProactiveAI();
+
   const [activeTab, setActiveTab] = useState<'chat' | 'live'>('chat');
 
   // --- Chatbot State ---
@@ -112,6 +120,34 @@ export const GeminiAssistantModal: React.FC<{
     isMutedRef.current = isMuted;
   }, [isMuted]);
 
+  // Synchronize modal tab and pre-filled message with proactive AI choices
+  useEffect(() => {
+    if (isOpen) {
+      if (assistantInitialTab === 'live') {
+        setActiveTab('live');
+      } else {
+        setActiveTab('chat');
+        if (assistantInitialMessage) {
+          setInputMessage(assistantInitialMessage);
+        }
+      }
+    }
+  }, [isOpen, assistantInitialTab, assistantInitialMessage]);
+
+  // Sync robot avatar animation state
+  useEffect(() => {
+    if (!isOpen) return;
+    if (liveStatus === 'speaking') {
+      setRobotState('speaking');
+    } else if (liveStatus === 'connected') {
+      setRobotState('listening');
+    } else if (liveStatus === 'connecting' || isSending) {
+      setRobotState('thinking');
+    } else {
+      setRobotState('idle');
+    }
+  }, [liveStatus, isSending, isOpen, setRobotState]);
+
   // Scroll chat to bottom
   useEffect(() => {
     if (activeTab === 'chat') {
@@ -123,11 +159,13 @@ export const GeminiAssistantModal: React.FC<{
   useEffect(() => {
     if (!isOpen) {
       stopLiveSession();
+      setRobotState('idle');
     }
     return () => {
       stopLiveSession();
+      setRobotState('idle');
     };
-  }, [isOpen]);
+  }, [isOpen, setRobotState]);
 
   // Handle Send Chat
   const handleSendMessage = async (textToSend?: string) => {
@@ -147,10 +185,13 @@ export const GeminiAssistantModal: React.FC<{
     setIsSending(true);
 
     const activeRoleObj = PRESET_ROLES.find((r) => r.id === selectedRole);
-    const systemInstruction =
+    const baseInstruction =
       selectedRole === 'custom'
         ? customInstruction.trim() || activeRoleObj?.instruction
         : activeRoleObj?.instruction;
+
+    const pageContextNote = `\n\n[USER INTERFACE CONTEXT: Currently active area="${promptState.contextType}", step="${promptState.step || 'default'}", relatedRequest="${promptState.requestId || 'none'}". Guide the user concisely with accurate DIGIZORT rules.]`;
+    const systemInstruction = (baseInstruction || '') + pageContextNote;
 
     try {
       const res = await fetch('/api/chat', {

@@ -438,6 +438,24 @@ export interface UserSettings {
   currency: CurrencyCode;
   currencySymbol: string;
   adminCode: string;
+  proactiveAIEnabled?: boolean;
+}
+
+export interface ProactiveAIConfig {
+  enabled: boolean;
+  triggerDelaySeconds: number;
+  errorThreshold: number;
+  cooldownMinutes: number;
+  maxPromptsPerSession: number;
+  voicePromptEnabled: boolean;
+  robotAnimationEnabled: boolean;
+}
+
+export interface ProactiveAIAnalytics {
+  promptsTriggered: number;
+  helpAccepted: number;
+  helpDismissed: number;
+  voiceAssistanceUsed: number;
 }
 
 export interface FilterOptions {
