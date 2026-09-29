@@ -133,6 +133,14 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // 9. Payment Verifications collection
+    match /payment_verifications/{verificationId} {
+      allow read: if true;
+      allow create: if true;
+      allow update: if true;
+      allow delete: if false;
+    }
+
     // Legacy fallback user documents
     match /users/{userId} {
       allow read, write: if true;

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../context/AppContext';
 import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
-import { OrderRequest, RequestStatus, AppUser, GroupPayment, BalanceTransaction } from '../types';
+import { OrderRequest, RequestStatus, AppUser, GroupPayment, BalanceTransaction, PaymentVerification } from '../types';
 import {
   calculateAccountSummary,
   isRequestRejected,
@@ -29,6 +29,7 @@ import { AdminOfferModal } from './AdminOfferModal';
 import { AdminBalanceActionModal } from './AdminBalanceActionModal';
 import { AdminSupportDeskView } from './AdminSupportDeskView';
 import { AdminAnnouncementsView } from './AdminAnnouncementsView';
+import { PaymentVerificationSection } from './PaymentVerificationSection';
 import { pushManager, NotificationPermissionState } from '../lib/pushNotifications';
 import {
   formatWelcomeAuthWhatsAppMessage,
@@ -234,6 +235,11 @@ export const AdminPanel: React.FC = () => {
 
   const completedRequestsCount = statsSummary.completedRequests;
   const pendingPaymentsCount = activeRequests.filter((r) => getRequestRemaining(r) > 0).length;
+  const pendingVerificationsCount = activeRequests.filter(
+    (r) =>
+      r.activePaymentVerification &&
+      (r.activePaymentVerification.status === 'Pending' || r.activePaymentVerification.status === 'Verifying')
+  ).length;
 
   const totalCollected = statsSummary.totalPaid;
   const totalPending = statsSummary.totalPending;
@@ -247,7 +253,14 @@ export const AdminPanel: React.FC = () => {
 
   // Filtered Active Requests (strictly separates rejected requests)
   const filteredRequests = activeRequests.filter((r) => {
-    if (reqStatusFilter !== 'All' && r.status !== reqStatusFilter) {
+    if (reqStatusFilter === 'Verification Pending') {
+      if (
+        !r.activePaymentVerification ||
+        (r.activePaymentVerification.status !== 'Pending' && r.activePaymentVerification.status !== 'Verifying')
+      ) {
+        return false;
+      }
+    } else if (reqStatusFilter !== 'All' && r.status !== reqStatusFilter) {
       return false;
     }
 
@@ -290,7 +303,24 @@ export const AdminPanel: React.FC = () => {
   });
 
   // Helper status badge
-  const getStatusBadge = (status: RequestStatus) => {
+  const getStatusBadge = (status: RequestStatus, verification?: PaymentVerification) => {
+    if (verification?.status === 'Pending') {
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1 shadow-sm">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+          <span>Verification Requested</span>
+        </span>
+      );
+    }
+    if (verification?.status === 'Verifying') {
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-blue-500/20 text-blue-300 border border-blue-500/40 flex items-center gap-1 shadow-sm">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+          <span>Verifying Payment</span>
+        </span>
+      );
+    }
+
     switch (status) {
       case 'Paid':
       case 'Completed':
@@ -664,6 +694,36 @@ export const AdminPanel: React.FC = () => {
         {/* TAB 1: DASHBOARD STATS */}
         {adminTab === 'dashboard' && (
           <div className="space-y-6">
+            {/* Pending Payment Verification Claims Alert Banner (Section 7) */}
+            {pendingVerificationsCount > 0 && (
+              <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-500/20 via-blue-500/10 to-zinc-900 border border-blue-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0 border border-blue-500/30">
+                    <ShieldCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-extrabold text-blue-300">
+                      {pendingVerificationsCount} Customer Payment Verification Request{pendingVerificationsCount > 1 ? 's' : ''} Awaiting Review
+                    </h4>
+                    <p className="text-xs text-zinc-400">
+                      Customers have clicked "I Have Paid" and submitted payment proofs or UTR reference IDs for verification.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setReqStatusFilter('Verification Pending');
+                    setAdminTab('requests');
+                  }}
+                  className="py-2 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-xs shadow-md transition-all self-start sm:self-auto shrink-0 flex items-center gap-1.5"
+                  id="btn-admin-dash-review-verifications"
+                >
+                  <span>Review Payment Claims</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
             {/* Pending Balance Requests Alert Banner */}
             {pendingBalanceRequestsCount > 0 && (
               <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-zinc-900 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
@@ -1088,6 +1148,9 @@ export const AdminPanel: React.FC = () => {
                 className="px-3.5 py-2 bg-zinc-950 border border-zinc-800 rounded-xl text-xs text-zinc-300 focus:outline-none focus:border-rose-500"
               >
                 <option value="All">All Active Statuses</option>
+                <option value="Verification Pending">
+                  🟡 Payment Verification Pending ({pendingVerificationsCount})
+                </option>
                 <option value="Pending Review">Pending Review</option>
                 <option value="Accepted">Accepted</option>
                 <option value="Processing">Processing</option>
@@ -1124,15 +1187,16 @@ export const AdminPanel: React.FC = () => {
                       layout
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="p-5 rounded-3xl bg-zinc-900 border border-zinc-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                      className="p-5 rounded-3xl bg-zinc-900 border border-zinc-800 space-y-4"
                     >
-                      <div className="space-y-1.5 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-extrabold text-white text-sm">{req.productName}</span>
-                          <span className="text-xs font-bold text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded-md">
-                            {req.userName} ({req.userMobile})
-                          </span>
-                          {getStatusBadge(req.status)}
+                      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                        <div className="space-y-1.5 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-extrabold text-white text-sm">{req.productName}</span>
+                            <span className="text-xs font-bold text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded-md">
+                              {req.userName} ({req.userMobile})
+                            </span>
+                            {getStatusBadge(req.status, req.activePaymentVerification)}
                           {req.balanceUsed && req.balanceUsed > 0 && (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
                               <Coins className="w-3 h-3 text-emerald-400" />
@@ -1330,7 +1394,18 @@ export const AdminPanel: React.FC = () => {
                           );
                         })()}
                       </div>
-                    </motion.div>
+                    </div>
+
+                    {/* Section 7, 8, 9, 13: Dedicated Payment Verification Section */}
+                    {(req.activePaymentVerification || (req.paymentVerificationHistory && req.paymentVerificationHistory.length > 0)) && (
+                      <div className="w-full pt-3 border-t border-zinc-800/80">
+                        <PaymentVerificationSection
+                          request={req}
+                          isAdminView={true}
+                        />
+                      </div>
+                    )}
+                  </motion.div>
                   );
                 })}
               </div>

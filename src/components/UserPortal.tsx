@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useApp } from '../context/AppContext';
 import { OFFICIAL_DIGIZORT_LOGO } from '../lib/branding';
-import { OrderRequest, RequestStatus } from '../types';
+import { OrderRequest, RequestStatus, PaymentVerification } from '../types';
 import {
   calculateAccountSummary,
   isRequestActive,
@@ -57,6 +57,8 @@ import { Wallet, HelpCircle, Megaphone } from 'lucide-react';
 import { UserProfileView } from './UserProfileView';
 import { HelpSupportView } from './HelpSupportView';
 import { UserAnnouncementsView } from './UserAnnouncementsView';
+import { PaymentVerificationModal } from './PaymentVerificationModal';
+import { PaymentVerificationSection } from './PaymentVerificationSection';
 
 export const UserPortal: React.FC = () => {
   const {
@@ -84,6 +86,7 @@ export const UserPortal: React.FC = () => {
   const [isNewRequestOpen, setIsNewRequestOpen] = useState(false);
   const [newRequestInitialUseBalance, setNewRequestInitialUseBalance] = useState(false);
   const [payWithBalanceReq, setPayWithBalanceReq] = useState<OrderRequest | null>(null);
+  const [payVerificationReq, setPayVerificationReq] = useState<OrderRequest | null>(null);
   const [isRequestMoneyOpen, setIsRequestMoneyOpen] = useState(false);
   const [selectedReq, setSelectedReq] = useState<OrderRequest | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -174,7 +177,24 @@ export const UserPortal: React.FC = () => {
   const totalPaidSoFar = userSummary.totalPaid;
   const totalExtraCash = userSummary.totalExtraCash;
 
-  const getStatusBadge = (status: RequestStatus) => {
+  const getStatusBadge = (status: RequestStatus, verification?: PaymentVerification) => {
+    if (verification?.status === 'Pending') {
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1 shadow-sm">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+          <span>Verification Pending</span>
+        </span>
+      );
+    }
+    if (verification?.status === 'Verifying') {
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-blue-500/20 text-blue-300 border border-blue-500/40 flex items-center gap-1 shadow-sm">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+          <span>Verifying Payment</span>
+        </span>
+      );
+    }
+
     switch (status) {
       case 'Paid':
       case 'Completed':
@@ -748,7 +768,7 @@ export const UserPortal: React.FC = () => {
                           <span className="text-[10px] px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-300 font-semibold">
                             {req.requestType}
                           </span>
-                          {getStatusBadge(req.status)}
+                          {getStatusBadge(req.status, req.activePaymentVerification)}
                           {req.balanceUsed && req.balanceUsed > 0 && (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
                               <Wallet className="w-3 h-3 text-emerald-400" />
@@ -778,16 +798,16 @@ export const UserPortal: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between md:justify-end gap-6 border-t md:border-t-0 pt-3 md:pt-0 border-zinc-800/60">
+                      <div className="flex items-center justify-between md:justify-end gap-6 border-t md:border-t-0 pt-3 md:pt-0 border-zinc-800/60 flex-wrap">
                         <div className="text-left md:text-right space-y-0.5">
                           {hasOffer ? (
                             <div className="space-y-0.5">
                               <div className="flex items-center gap-1.5 md:justify-end">
                                 <span className="text-[10px] text-zinc-500 line-through">
-                                  Orig: {settings.currencySymbol}{orig.toLocaleString('en-IN')}
+                                   Orig: {settings.currencySymbol}{orig.toLocaleString('en-IN')}
                                 </span>
                                 <span className="text-[10px] font-extrabold px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                                  SPECIAL OFFER
+                                   SPECIAL OFFER
                                 </span>
                               </div>
                               <span className="text-xs font-black text-amber-400 block">
@@ -836,6 +856,23 @@ export const UserPortal: React.FC = () => {
                         </div>
 
                         <div className="flex items-center gap-2">
+                          {/* "I Have Paid" Button (Section 1) */}
+                          {rem > 0 && !isRequestRejected(req) && req.status !== 'Cancelled' && (!req.activePaymentVerification || req.activePaymentVerification.status === 'Rejected') && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPayVerificationReq(req);
+                              }}
+                              className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all shrink-0 active:scale-[0.98]"
+                              id={`btn-i-have-paid-${req.id}`}
+                              title="Submit payment details for DIGIZORT team to verify"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>I Have Paid</span>
+                            </button>
+                          )}
+
                           {rem > 0 && getUserBalanceInfo(currentUser.mobileNumber, currentUser.id).availableBalance > 0 && !isRequestRejected(req) && req.status !== 'Cancelled' && (
                             <button
                               onClick={(e) => {
@@ -861,6 +898,17 @@ export const UserPortal: React.FC = () => {
                           </button>
                         </div>
                       </div>
+
+                      {/* Payment Verification Section Embedded in Request Card (Section 6 & 8) */}
+                      {req.activePaymentVerification && (
+                        <div className="w-full pt-2" onClick={(e) => e.stopPropagation()}>
+                          <PaymentVerificationSection
+                            request={req}
+                            isAdminView={false}
+                            onOpenPayModal={() => setPayVerificationReq(req)}
+                          />
+                        </div>
+                      )}
                     </motion.div>
                   );
                 })}
@@ -1488,6 +1536,24 @@ export const UserPortal: React.FC = () => {
               <div className="flex items-center justify-between pr-8 flex-wrap gap-2">
                 <h3 className="text-lg font-extrabold text-white">{selectedReq.productName}</h3>
                 <div className="flex items-center gap-2">
+                  {/* I Have Paid Button in Selected Request Modal (Section 1) */}
+                  {getRequestRemaining(selectedReq) > 0 &&
+                    !isRequestRejected(selectedReq) &&
+                    selectedReq.status !== 'Cancelled' &&
+                    (!selectedReq.activePaymentVerification || selectedReq.activePaymentVerification.status === 'Rejected') && (
+                      <button
+                        onClick={() => {
+                          const req = selectedReq;
+                          setPayVerificationReq(req);
+                        }}
+                        className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl transition-all flex items-center gap-1.5 shadow-md shadow-emerald-600/20 active:scale-[0.98]"
+                        id="btn-selected-req-i-have-paid"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>I Have Paid</span>
+                      </button>
+                    )}
+
                   {getRequestRemaining(selectedReq) > 0 &&
                     getUserBalanceInfo(currentUser.mobileNumber, currentUser.id).availableBalance > 0 &&
                     !isRequestRejected(selectedReq) &&
@@ -1521,6 +1587,15 @@ export const UserPortal: React.FC = () => {
               </div>
               <p className="text-xs text-zinc-400">{selectedReq.purpose} • #{selectedReq.id}</p>
             </div>
+
+            {/* Embedded Payment Verification Section in Details Modal (Section 6 & 8) */}
+            {selectedReq.activePaymentVerification && (
+              <PaymentVerificationSection
+                request={selectedReq}
+                isAdminView={false}
+                onOpenPayModal={() => setPayVerificationReq(selectedReq)}
+              />
+            )}
 
             <DigitalDocumentCard transaction={selectedReq} showWhatsAppShare={false} isAdminView={false} />
           </div>
@@ -1563,6 +1638,15 @@ export const UserPortal: React.FC = () => {
           isOpen={Boolean(payWithBalanceReq)}
           onClose={() => setPayWithBalanceReq(null)}
           request={payWithBalanceReq}
+        />
+      )}
+
+      {/* User Payment Verification Request Modal (Section 2 - 5) */}
+      {payVerificationReq && (
+        <PaymentVerificationModal
+          isOpen={Boolean(payVerificationReq)}
+          onClose={() => setPayVerificationReq(null)}
+          request={payVerificationReq}
         />
       )}
 

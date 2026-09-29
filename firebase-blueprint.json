@@ -108,6 +108,8 @@
         "externalPaymentPaid": { "type": "number" },
         "paymentMethodUsed": { "type": "string" },
         "balanceRefunded": { "type": "number" },
+        "activePaymentVerification": { "type": "object" },
+        "paymentVerificationHistory": { "type": "array" },
         "status": { "type": "string" },
         "submissionWhatsAppStatus": { "type": "string" },
         "submissionWhatsAppMessageId": { "type": "string" },
@@ -179,6 +181,30 @@
         "updatedAt": { "type": "string" },
         "createdBy": { "type": "string" },
         "readByUserMobiles": { "type": "array" }
+      }
+    },
+    "paymentVerifications": {
+      "path": "payment_verifications/{verificationId}",
+      "fields": {
+        "id": { "type": "string" },
+        "requestId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userMobile": { "type": "string" },
+        "paymentMethod": { "type": "string" },
+        "customPaymentMethod": { "type": "string" },
+        "amountClaimed": { "type": "number" },
+        "transactionId": { "type": "string" },
+        "userNote": { "type": "string" },
+        "proofUrl": { "type": "string" },
+        "status": { "type": "string" },
+        "submittedAt": { "type": "string" },
+        "verificationStartedAt": { "type": "string" },
+        "verificationStartedBy": { "type": "string" },
+        "processedAt": { "type": "string" },
+        "processedBy": { "type": "string" },
+        "rejectionReason": { "type": "string" },
+        "adminNotes": { "type": "string" }
       }
     }
   }

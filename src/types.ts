@@ -65,7 +65,36 @@ export type TimelineEventType =
   | 'NOTE_ADDED'
   | 'OFFER_APPLIED'
   | 'BALANCE_USED'
-  | 'BALANCE_REFUNDED';
+  | 'BALANCE_REFUNDED'
+  | 'PAYMENT_VERIFIED'
+  | 'PAYMENT_VERIFICATION_SUBMITTED'
+  | 'PAYMENT_VERIFICATION_STARTED'
+  | 'PAYMENT_VERIFICATION_REJECTED';
+
+export type PaymentVerificationMethod = 'Cash' | 'UPI' | 'Bank Transfer' | 'Other';
+export type PaymentVerificationStatus = 'Pending' | 'Verifying' | 'Approved' | 'Rejected';
+
+export interface PaymentVerification {
+  id: string; // e.g. PV-000123
+  requestId: string;
+  userId: string;
+  userName: string;
+  userMobile: string;
+  paymentMethod: PaymentVerificationMethod | string;
+  customPaymentMethod?: string;
+  amountClaimed: number;
+  transactionId?: string; // UTR or Reference ID
+  userNote?: string;
+  proofUrl?: string;
+  status: PaymentVerificationStatus;
+  submittedAt: string; // ISO date string
+  verificationStartedAt?: string;
+  verificationStartedBy?: string;
+  processedAt?: string;
+  processedBy?: string;
+  rejectionReason?: string;
+  adminNotes?: string;
+}
 
 export interface TimelineEvent {
   id: string;
@@ -140,6 +169,9 @@ export interface OrderRequest {
   externalPaymentPaid?: number;
   paymentMethodUsed?: 'DIGIZORT Balance' | 'External Payment' | 'Split Payment' | string;
   balanceRefunded?: number;
+  // User Payment Verification Request System
+  activePaymentVerification?: PaymentVerification;
+  paymentVerificationHistory?: PaymentVerification[];
   // Compatibility fields for transaction legacy support
   amount?: number;
   category?: string;
@@ -369,6 +401,10 @@ export type NotificationType =
   | 'support_response'
   | 'request_cancelled'
   | 'special_offer'
+  | 'payment_verification_submitted'
+  | 'payment_verification_started'
+  | 'payment_verification_approved'
+  | 'payment_verification_rejected'
   | 'info';
 
 export interface AppNotification {

@@ -33,6 +33,8 @@ import {
   TrendingDown,
 } from 'lucide-react';
 import { normalizeWhatsAppNumber, sendWhatsAppViaServer } from '../lib/whatsapp';
+import { PaymentVerificationSection } from './PaymentVerificationSection';
+import { PaymentVerificationModal } from './PaymentVerificationModal';
 
 interface DigitalDocumentCardProps {
   transaction: OrderRequest;
@@ -81,6 +83,9 @@ export const DigitalDocumentCard: React.FC<DigitalDocumentCardProps> = ({
   const [payoutAmount, setPayoutAmount] = useState<string>('');
   const [payoutNote, setPayoutNote] = useState('Paid customer balance cash at desk');
   const [isPayingCredit, setIsPayingCredit] = useState(false);
+
+  // User payment verification request modal state
+  const [showVerificationModal, setShowVerificationModal] = useState(false);
 
   const formattedDate = new Date(currentTransaction.createdAt).toLocaleDateString('en-IN', {
     day: 'numeric',
@@ -745,6 +750,40 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
           </div>
         )}
 
+        {/* PAYMENT VERIFICATION SECTION (Customer & Admin Unified) */}
+        {currentTransaction.activePaymentVerification && (
+          <div className="space-y-1.5">
+            <PaymentVerificationSection
+              request={currentTransaction}
+              isAdminView={allowAdminFinancialControls}
+              onOpenPayModal={() => setShowVerificationModal(true)}
+            />
+          </div>
+        )}
+
+        {/* CUSTOMER "I HAVE PAID" ACTION BANNER (When order balance due & not rejected) */}
+        {!allowAdminFinancialControls && remainingAmount > 0 && currentTransaction.status !== 'Cancelled' && (!currentTransaction.activePaymentVerification || currentTransaction.activePaymentVerification.status === 'Rejected') && (
+          <div className="p-3.5 rounded-2xl bg-zinc-900 border border-zinc-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <span className="text-xs font-bold text-white block">
+                Have you completed payment for this order?
+              </span>
+              <span className="text-[10px] text-zinc-400 block">
+                Submit your payment details. DIGIZORT will verify and approve your order statement.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowVerificationModal(true)}
+              className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs rounded-xl shadow-md flex items-center justify-center gap-1.5 transition-all shrink-0 active:scale-[0.98]"
+              id="btn-doc-card-i-have-paid"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>I Have Paid ({settings.currencySymbol}{remainingAmount.toLocaleString('en-IN')})</span>
+            </button>
+          </div>
+        )}
+
         {/* Audit Timeline Logs */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -1205,6 +1244,15 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
             Reset
           </button>
         </div>
+      )}
+
+      {/* Customer Payment Verification Modal */}
+      {showVerificationModal && (
+        <PaymentVerificationModal
+          isOpen={showVerificationModal}
+          request={currentTransaction}
+          onClose={() => setShowVerificationModal(false)}
+        />
       )}
     </div>
   );

@@ -22,6 +22,9 @@ import {
   AnnouncementType,
   AnnouncementAudienceType,
   AnnouncementStatus,
+  PaymentVerification,
+  PaymentVerificationMethod,
+  PaymentVerificationStatus,
 } from '../types';
 import {
   db,
@@ -44,6 +47,7 @@ import {
   getRequestPaid,
   getRequestRemaining,
   isRequestRejected,
+  isRequestCancelled,
   getUserAvailableBalance,
 } from '../lib/calculations';
 import confetti from 'canvas-confetti';
@@ -108,6 +112,29 @@ interface AppContextType {
     }
   ) => Promise<void>;
   updateUserProfile: (updatedData: Partial<AppUser>) => Promise<void>;
+
+  // Payment Verification System
+  userSubmitPaymentVerification: (params: {
+    requestId: string;
+    paymentMethod: PaymentVerificationMethod | string;
+    customPaymentMethod?: string;
+    amountPaid: number;
+    transactionId?: string;
+    userNote?: string;
+    proofUrl?: string;
+  }) => Promise<PaymentVerification>;
+  adminStartPaymentVerification: (requestId: string, verificationId: string) => Promise<void>;
+  adminApprovePaymentVerification: (params: {
+    requestId: string;
+    verificationId: string;
+    adminNotes?: string;
+  }) => Promise<void>;
+  adminRejectPaymentVerification: (params: {
+    requestId: string;
+    verificationId: string;
+    rejectionReason: string;
+    adminNotes?: string;
+  }) => Promise<void>;
 
   // Balance Management
   balanceRequests: BalanceRequest[];
@@ -2562,6 +2589,421 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
+  // User Payment Verification Request System (Section 1 - 11)
+  const userSubmitPaymentVerification = async (params: {
+    requestId: string;
+    paymentMethod: PaymentVerificationMethod | string;
+    customPaymentMethod?: string;
+    amountPaid: number;
+    transactionId?: string;
+    userNote?: string;
+    proofUrl?: string;
+  }): Promise<PaymentVerification> => {
+    if (!currentUser) throw new Error('Must be logged in to submit a payment verification.');
+
+    const docRef = doc(db, 'requests', params.requestId);
+    const snap = await getDoc(docRef);
+    if (!snap.exists()) throw new Error('Order request not found.');
+
+    const req = snap.data() as OrderRequest;
+    if (isRequestRejected(req)) throw new Error('Cannot submit payment verification for a rejected request.');
+    if (isRequestCancelled(req)) throw new Error('Cannot submit payment verification for a cancelled request.');
+
+    // Prevent duplicate verification request if one is currently pending or verifying
+    if (
+      req.activePaymentVerification &&
+      (req.activePaymentVerification.status === 'Pending' || req.activePaymentVerification.status === 'Verifying')
+    ) {
+      throw new Error('A payment verification request is already being processed for this order.');
+    }
+
+    const remainingDue = getRequestRemaining(req);
+    const amount = Number(params.amountPaid);
+    if (isNaN(amount) || amount <= 0) {
+      throw new Error('Please enter a valid amount greater than 0.');
+    }
+    if (amount > remainingDue) {
+      throw new Error(`Amount cannot exceed the remaining due amount of ₹${remainingDue.toLocaleString('en-IN')}.`);
+    }
+
+    const nowIso = new Date().toISOString();
+    const verificationId = `PV-${String(Math.floor(100000 + Math.random() * 900000))}`;
+
+    const newVerification: PaymentVerification = {
+      id: verificationId,
+      requestId: req.id,
+      userId: currentUser.id || req.userId,
+      userName: currentUser.fullName || req.userName,
+      userMobile: currentUser.mobileNumber || req.userMobile,
+      paymentMethod: params.paymentMethod,
+      customPaymentMethod: params.customPaymentMethod?.trim() || undefined,
+      amountClaimed: amount,
+      transactionId: params.transactionId?.trim() || undefined,
+      userNote: params.userNote?.trim() || undefined,
+      proofUrl: params.proofUrl?.trim() || undefined,
+      status: 'Pending',
+      submittedAt: nowIso,
+    };
+
+    const newTimelineEvt: TimelineEvent = {
+      id: 'EVT-' + Date.now(),
+      type: 'PAYMENT_VERIFICATION_SUBMITTED',
+      title: `Payment Claimed via ${params.paymentMethod} (₹${amount.toLocaleString('en-IN')})`,
+      timestamp: nowIso,
+      totalPaidSoFar: req.amountPaid || 0,
+      remainingBalance: remainingDue,
+      notes: `Verification #${verificationId} submitted for ₹${amount.toLocaleString('en-IN')}.${params.transactionId ? ` Ref: ${params.transactionId}.` : ''}${params.userNote ? ` Note: "${params.userNote}"` : ''}`,
+      actor: 'USER',
+    };
+
+    const updatedTimeline = [...(req.timeline || []), newTimelineEvt];
+
+    const batch = writeBatch(db);
+
+    batch.update(docRef, sanitizeForFirestore({
+      activePaymentVerification: newVerification,
+      timeline: updatedTimeline,
+      updatedAt: nowIso,
+    }));
+
+    batch.set(
+      doc(db, 'payment_verifications', verificationId),
+      sanitizeForFirestore(newVerification)
+    );
+
+    // Notify Admin of new payment claim
+    const adminNotifId = 'NOTIF-ADM-PV-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', adminNotifId),
+      sanitizeForFirestore({
+        id: adminNotifId,
+        targetUserMobile: 'ADMIN',
+        title: 'Payment Verification Requested',
+        message: `${currentUser.fullName} (${currentUser.mobileNumber}) claimed payment of ₹${amount.toLocaleString('en-IN')} via ${params.paymentMethod} for order #${req.id}.`,
+        type: 'payment_verification_submitted',
+        timestamp: nowIso,
+        read: false,
+        requestId: req.id,
+        relatedRequestId: req.id,
+        amount: amount,
+      })
+    );
+
+    // Notify User confirmation
+    const userNotifId = 'NOTIF-USR-PV-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', userNotifId),
+      sanitizeForFirestore({
+        id: userNotifId,
+        targetUserMobile: currentUser.mobileNumber,
+        title: 'Payment Verification Submitted',
+        message: `Your payment claim #${verificationId} of ₹${amount.toLocaleString('en-IN')} for "${req.productName}" was sent to the DIGIZORT Team for verification.`,
+        type: 'payment_verification_submitted',
+        timestamp: nowIso,
+        read: false,
+        requestId: req.id,
+        relatedRequestId: req.id,
+        amount: amount,
+      })
+    );
+
+    await batch.commit();
+
+    showToast(`Payment verification #${verificationId} submitted successfully!`);
+    return newVerification;
+  };
+
+  const adminStartPaymentVerification = async (requestId: string, verificationId: string) => {
+    enforceAdminAccess();
+    const docRef = doc(db, 'requests', requestId);
+    const snap = await getDoc(docRef);
+    if (!snap.exists()) throw new Error('Order request not found.');
+
+    const req = snap.data() as OrderRequest;
+    const currentVerification = req.activePaymentVerification;
+    if (!currentVerification || currentVerification.id !== verificationId) {
+      throw new Error('Active payment verification not found on this request.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const updatedVerification: PaymentVerification = {
+      ...currentVerification,
+      status: 'Verifying',
+      verificationStartedAt: nowIso,
+      verificationStartedBy: 'DIGIZORT Admin',
+    };
+
+    const newTimelineEvt: TimelineEvent = {
+      id: 'EVT-' + Date.now(),
+      type: 'PAYMENT_VERIFICATION_STARTED',
+      title: 'Verification Started by DIGIZORT',
+      timestamp: nowIso,
+      totalPaidSoFar: req.amountPaid || 0,
+      remainingBalance: getRequestRemaining(req),
+      notes: `DIGIZORT has started verifying payment claim #${verificationId} (₹${currentVerification.amountClaimed.toLocaleString('en-IN')}).`,
+      actor: 'ADMIN',
+    };
+
+    const batch = writeBatch(db);
+
+    batch.update(docRef, sanitizeForFirestore({
+      activePaymentVerification: updatedVerification,
+      timeline: [...(req.timeline || []), newTimelineEvt],
+      updatedAt: nowIso,
+    }));
+
+    batch.set(
+      doc(db, 'payment_verifications', verificationId),
+      sanitizeForFirestore(updatedVerification),
+      { merge: true }
+    );
+
+    // Notify user that verification has started
+    const notifId = 'NOTIF-PV-START-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', notifId),
+      sanitizeForFirestore({
+        id: notifId,
+        targetUserMobile: req.userMobile,
+        title: 'Verifying Payment',
+        message: `DIGIZORT is now verifying your payment of ₹${currentVerification.amountClaimed.toLocaleString('en-IN')} for "${req.productName}".`,
+        type: 'payment_verification_started',
+        timestamp: nowIso,
+        read: false,
+        requestId: req.id,
+        relatedRequestId: req.id,
+      })
+    );
+
+    await batch.commit();
+    showToast('Verification started for this payment.');
+  };
+
+  const adminApprovePaymentVerification = async (params: {
+    requestId: string;
+    verificationId: string;
+    adminNotes?: string;
+  }) => {
+    enforceAdminAccess();
+    const { requestId, verificationId, adminNotes } = params;
+    const docRef = doc(db, 'requests', requestId);
+    const snap = await getDoc(docRef);
+    if (!snap.exists()) throw new Error('Order request not found.');
+
+    const req = snap.data() as OrderRequest;
+    const currentVerification = req.activePaymentVerification;
+    if (!currentVerification || currentVerification.id !== verificationId) {
+      throw new Error('Active payment verification not found on this request.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const paymentAmount = currentVerification.amountClaimed;
+
+    const actual = getRequestPrice(req);
+    const prevPaid = req.amountPaid || 0;
+    const due = Math.max(0, actual - prevPaid);
+
+    let newPaidTotal: number;
+    let newRemaining: number;
+    let extraCash: number = 0;
+    let newStatus: RequestStatus;
+
+    if (paymentAmount >= due) {
+      newPaidTotal = actual;
+      newRemaining = 0;
+      extraCash = paymentAmount - due;
+      newStatus = 'Paid';
+    } else {
+      newPaidTotal = prevPaid + paymentAmount;
+      newRemaining = Math.max(0, actual - newPaidTotal);
+      extraCash = 0;
+      newStatus = 'Partially Paid';
+    }
+
+    const approvedVerification: PaymentVerification = {
+      ...currentVerification,
+      status: 'Approved',
+      processedAt: nowIso,
+      processedBy: 'DIGIZORT Admin',
+      adminNotes: adminNotes?.trim() || undefined,
+    };
+
+    const newHistory = [...(req.paymentVerificationHistory || []), approvedVerification];
+
+    const noteText = adminNotes?.trim()
+      ? `Payment verified & approved via ${currentVerification.paymentMethod}: ₹${paymentAmount.toLocaleString('en-IN')}.${currentVerification.transactionId ? ` UTR: ${currentVerification.transactionId}.` : ''} Note: ${adminNotes}`
+      : `Payment verified & approved via ${currentVerification.paymentMethod}: ₹${paymentAmount.toLocaleString('en-IN')}.${currentVerification.transactionId ? ` UTR: ${currentVerification.transactionId}.` : ''}`;
+
+    const newTimelineEvt: TimelineEvent = {
+      id: 'EVT-' + Date.now(),
+      type: 'PAYMENT_VERIFIED',
+      title: newRemaining === 0 ? 'Payment Verified & Completed' : `Payment Verified (+₹${paymentAmount.toLocaleString('en-IN')})`,
+      timestamp: nowIso,
+      amountPaidThisStep: Math.min(paymentAmount, due),
+      totalPaidSoFar: newPaidTotal,
+      remainingBalance: newRemaining,
+      notes: noteText,
+      actor: 'ADMIN',
+    };
+
+    const batch = writeBatch(db);
+
+    batch.update(docRef, sanitizeForFirestore({
+      amountPaid: newPaidTotal,
+      remainingAmount: newRemaining,
+      extraCash: (req.extraCash || 0) + extraCash,
+      cashReceived: paymentAmount,
+      status: newStatus,
+      activePaymentVerification: approvedVerification,
+      paymentVerificationHistory: newHistory,
+      timeline: [...(req.timeline || []), newTimelineEvt],
+      updatedAt: nowIso,
+    }));
+
+    batch.set(
+      doc(db, 'payment_verifications', verificationId),
+      sanitizeForFirestore(approvedVerification),
+      { merge: true }
+    );
+
+    // If overpaid extra cash, credit to customer balance ledger
+    if (extraCash > 0) {
+      const balInfo = getUserBalanceInfo(req.userMobile, req.userId);
+      const prevBal = balInfo.availableBalance;
+      const newBal = prevBal + extraCash;
+      const now = new Date();
+      const bTxId = 'BTX-' + Date.now();
+      const bTx: BalanceTransaction = {
+        id: bTxId,
+        userId: req.userId || '',
+        userName: req.userName,
+        userMobile: req.userMobile,
+        type: 'Balance Added',
+        amount: extraCash,
+        previousBalance: prevBal,
+        remainingBalance: newBal,
+        date: now.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+        time: now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
+        timestamp: nowIso,
+        relatedRequestId: req.id,
+        relatedRequestTitle: req.productName,
+        actor: 'ADMIN',
+        notes: `Overpayment extra cash from verified payment #${verificationId}`,
+      };
+      batch.set(doc(db, 'balance_transactions', bTxId), sanitizeForFirestore(bTx));
+      if (req.userId) {
+        batch.set(doc(db, 'app_users', req.userId), { creditBalance: newBal, updatedAt: nowIso }, { merge: true });
+      }
+    }
+
+    // User Notification
+    const notifId = 'NOTIF-PV-APP-' + Date.now();
+    const notifMsg = newRemaining === 0
+      ? `Your payment of ₹${paymentAmount.toLocaleString('en-IN')} for "${req.productName}" was verified and approved by DIGIZORT. Order is now fully Paid!`
+      : `Your payment of ₹${paymentAmount.toLocaleString('en-IN')} for "${req.productName}" was verified and approved. Remaining balance: ₹${newRemaining.toLocaleString('en-IN')}.`;
+
+    batch.set(
+      doc(db, 'notifications', notifId),
+      sanitizeForFirestore({
+        id: notifId,
+        targetUserMobile: req.userMobile,
+        title: 'Payment Verified & Approved!',
+        message: notifMsg,
+        type: 'payment_verification_approved',
+        timestamp: nowIso,
+        read: false,
+        requestId: req.id,
+        relatedRequestId: req.id,
+        amount: paymentAmount,
+      })
+    );
+
+    await batch.commit();
+
+    confetti({ particleCount: 120, spread: 80, origin: { y: 0.6 } });
+    showToast(`Payment of ₹${paymentAmount.toLocaleString('en-IN')} verified & approved!`);
+  };
+
+  const adminRejectPaymentVerification = async (params: {
+    requestId: string;
+    verificationId: string;
+    rejectionReason: string;
+    adminNotes?: string;
+  }) => {
+    enforceAdminAccess();
+    const { requestId, verificationId, rejectionReason, adminNotes } = params;
+    const cleanReason = (rejectionReason || '').trim() || 'Payment could not be verified';
+
+    const docRef = doc(db, 'requests', requestId);
+    const snap = await getDoc(docRef);
+    if (!snap.exists()) throw new Error('Order request not found.');
+
+    const req = snap.data() as OrderRequest;
+    const currentVerification = req.activePaymentVerification;
+    if (!currentVerification || currentVerification.id !== verificationId) {
+      throw new Error('Active payment verification not found on this request.');
+    }
+
+    const nowIso = new Date().toISOString();
+
+    const rejectedVerification: PaymentVerification = {
+      ...currentVerification,
+      status: 'Rejected',
+      processedAt: nowIso,
+      processedBy: 'DIGIZORT Admin',
+      rejectionReason: cleanReason,
+      adminNotes: adminNotes?.trim() || undefined,
+    };
+
+    const newHistory = [...(req.paymentVerificationHistory || []), rejectedVerification];
+
+    const newTimelineEvt: TimelineEvent = {
+      id: 'EVT-' + Date.now(),
+      type: 'PAYMENT_VERIFICATION_REJECTED',
+      title: 'Payment Verification Rejected',
+      timestamp: nowIso,
+      totalPaidSoFar: req.amountPaid || 0,
+      remainingBalance: getRequestRemaining(req),
+      notes: `Verification #${verificationId} for ₹${currentVerification.amountClaimed.toLocaleString('en-IN')} was rejected. Reason: ${cleanReason}.${adminNotes ? ` Note: ${adminNotes}` : ''}`,
+      actor: 'ADMIN',
+    };
+
+    const batch = writeBatch(db);
+
+    batch.update(docRef, sanitizeForFirestore({
+      activePaymentVerification: rejectedVerification,
+      paymentVerificationHistory: newHistory,
+      timeline: [...(req.timeline || []), newTimelineEvt],
+      updatedAt: nowIso,
+    }));
+
+    batch.set(
+      doc(db, 'payment_verifications', verificationId),
+      sanitizeForFirestore(rejectedVerification),
+      { merge: true }
+    );
+
+    // Notify user with reason
+    const notifId = 'NOTIF-PV-REJ-' + Date.now();
+    batch.set(
+      doc(db, 'notifications', notifId),
+      sanitizeForFirestore({
+        id: notifId,
+        targetUserMobile: req.userMobile,
+        title: 'Payment Verification Rejected',
+        message: `Your payment verification for "${req.productName}" was rejected: ${cleanReason}. Please check your payment details or contact DIGIZORT support.`,
+        type: 'payment_verification_rejected',
+        timestamp: nowIso,
+        read: false,
+        requestId: req.id,
+        relatedRequestId: req.id,
+      })
+    );
+
+    await batch.commit();
+    showToast(`Payment verification rejected.`);
+  };
+
   const adminApplyOffer = async (params: {
     requestId: string;
     newPrice: number;
@@ -4212,6 +4654,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userCancelRequest,
         userEditRequest,
         updateUserProfile,
+        userSubmitPaymentVerification,
+        adminStartPaymentVerification,
+        adminApprovePaymentVerification,
+        adminRejectPaymentVerification,
         createSupportTicket,
         addSupportTicketMessage,
         adminUpdateSupportTicketStatus,

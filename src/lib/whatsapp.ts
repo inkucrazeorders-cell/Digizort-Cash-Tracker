@@ -269,3 +269,60 @@ Welcome to the upgraded DIGIZORT experience.
 
 — DIGIZORT Team`;
 }
+
+/**
+ * Formats the official DIGIZORT WhatsApp message when payment verification is approved (Section 22).
+ */
+export function formatPaymentVerifiedWhatsAppMessage(params: {
+  customerName: string;
+  requestId: string;
+  paymentMethod: string;
+  amount: number;
+  currencySymbol?: string;
+}): string {
+  const sym = params.currencySymbol || '₹';
+  return `DIGIZORT
+
+Hello ${params.customerName} 👋
+
+Your payment verification for Request #${params.requestId} has been completed.
+
+Payment Method: ${params.paymentMethod}
+Amount: ${sym}${params.amount.toLocaleString('en-IN')}
+Status: VERIFIED ✓
+
+Your payment has been successfully recorded by DIGIZORT.
+
+Thank you for using DIGIZORT.
+
+— DIGIZORT Team`;
+}
+
+/**
+ * Formats the official DIGIZORT WhatsApp message when payment verification is rejected (Section 22).
+ */
+export function formatPaymentRejectedWhatsAppMessage(params: {
+  customerName: string;
+  requestId: string;
+  paymentMethod: string;
+  amount: number;
+  reason: string;
+  currencySymbol?: string;
+}): string {
+  const sym = params.currencySymbol || '₹';
+  return `DIGIZORT
+
+Hello ${params.customerName} 👋
+
+Your payment verification for Request #${params.requestId} could not be verified.
+
+Payment Method: ${params.paymentMethod}
+Amount: ${sym}${params.amount.toLocaleString('en-IN')}
+
+Reason:
+${params.reason}
+
+Please review the payment details and submit a new verification request if required.
+
+— DIGIZORT Team`;
+}
