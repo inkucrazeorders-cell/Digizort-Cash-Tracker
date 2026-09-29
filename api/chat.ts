@@ -19,10 +19,15 @@ export default async function chatHandler(req: Request, res: Response) {
 
   // Valid model selection according to specification:
   // - gemini-3.1-pro-preview for complex tasks
-  // - gemini-3.5-flash for general tasks (default)
+  // - gemini-3.5-flash / digizort-flash for general tasks (default)
   // - gemini-3.1-flash-lite for tasks that should happen fast
-  const validModels = ['gemini-3.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.1-pro-preview'];
-  const targetModel = validModels.includes(model) ? model : 'gemini-3.5-flash';
+  const modelMap: Record<string, string> = {
+    'digizort-flash': 'gemini-3.5-flash',
+    'gemini-3.5-flash': 'gemini-3.5-flash',
+    'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite',
+    'gemini-3.1-pro-preview': 'gemini-3.1-pro-preview',
+  };
+  const targetModel = modelMap[model] || 'gemini-3.5-flash';
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'messages array is required' });

@@ -1,1 +1,90 @@
 @import "tailwindcss";
+
+@keyframes robot-eye-blink {
+  0%, 90%, 96%, 100% {
+    transform: scaleY(1);
+  }
+  93% {
+    transform: scaleY(0.12);
+  }
+}
+
+@keyframes robot-scanning-beam {
+  0% {
+    transform: translateX(-14px);
+    opacity: 0.3;
+  }
+  50% {
+    transform: translateX(14px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(-14px);
+    opacity: 0.3;
+  }
+}
+
+@keyframes robot-bar-bounce-1 {
+  0%, 100% {
+    transform: scaleY(0.4);
+  }
+  50% {
+    transform: scaleY(1.2);
+  }
+}
+
+@keyframes robot-bar-bounce-2 {
+  0%, 100% {
+    transform: scaleY(1.1);
+  }
+  50% {
+    transform: scaleY(0.3);
+  }
+}
+
+@keyframes robot-bar-bounce-3 {
+  0%, 100% {
+    transform: scaleY(0.6);
+  }
+  50% {
+    transform: scaleY(1.3);
+  }
+}
+
+.robot-blink {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: robot-eye-blink 4.2s infinite ease-in-out;
+}
+
+.robot-scan {
+  animation: robot-scanning-beam 2.2s infinite ease-in-out;
+}
+
+.robot-soundwave-bar-1 {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: robot-bar-bounce-1 0.65s infinite ease-in-out;
+}
+
+.robot-soundwave-bar-2 {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: robot-bar-bounce-2 0.5s infinite ease-in-out 0.1s;
+}
+
+.robot-soundwave-bar-3 {
+  transform-box: fill-box;
+  transform-origin: bottom;
+  animation: robot-bar-bounce-3 0.72s infinite ease-in-out 0.2s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .robot-blink,
+  .robot-scan,
+  .robot-soundwave-bar-1,
+  .robot-soundwave-bar-2,
+  .robot-soundwave-bar-3 {
+    animation: none !important;
+  }
+}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useProactiveAI } from '../context/ProactiveAIContext';
+import { RobotAIAvatarSVG } from './RobotAIAvatar';
 import {
   Sparkles,
   Mic,
@@ -78,6 +79,7 @@ export const GeminiAssistantModal: React.FC<{
   const {
     assistantInitialTab,
     assistantInitialMessage,
+    robotState,
     setRobotState,
     promptState,
   } = useProactiveAI();
@@ -217,11 +219,15 @@ export const GeminiAssistantModal: React.FC<{
       };
 
       setMessages((prev) => [...prev, modelMsg]);
+      setRobotState('speaking');
+      setTimeout(() => {
+        setRobotState('idle');
+      }, 2400);
     } catch (err: any) {
       const errorMsg: ChatMessage = {
         id: String(Date.now() + 1),
         role: 'model',
-        content: `⚠️ Error: ${err?.message || 'Unable to connect to Gemini API. Please verify server connection.'}`,
+        content: `⚠️ Error: ${err?.message || 'Unable to connect to DIGIZORT AI. Please verify server connection.'}`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, errorMsg]);
@@ -457,14 +463,14 @@ export const GeminiAssistantModal: React.FC<{
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-zinc-800 flex items-center justify-between gap-3 bg-zinc-900/90 backdrop-blur-md shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-rose-600 via-amber-600 to-[#E53935] flex items-center justify-center text-white shadow-lg shadow-rose-950/40">
-              <Sparkles className="w-5 h-5 animate-pulse" />
+            <div className="w-10 h-10 rounded-2xl bg-zinc-950 border border-zinc-800/80 flex items-center justify-center text-white shadow-lg shadow-black/40 overflow-hidden shrink-0">
+              <RobotAIAvatarSVG state={robotState} size="sm" />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-extrabold text-white">DIGIZORT AI Studio</h3>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                  Gemini 3
+                  Digizort AI
                 </span>
               </div>
               <p className="text-xs text-zinc-400">
@@ -501,7 +507,7 @@ export const GeminiAssistantModal: React.FC<{
                 }`}
               >
                 <Mic className="w-3.5 h-3.5" />
-                <span>Voice (Live API)</span>
+                <span>Voice (Live Mode)</span>
               </button>
             </div>
 
@@ -534,7 +540,7 @@ export const GeminiAssistantModal: React.FC<{
                     title="General Tasks (Default)"
                   >
                     <Sparkles className="w-3 h-3 text-amber-400" />
-                    <span>gemini-3.5-flash</span>
+                    <span>digizort-flash</span>
                   </button>
                   <button
                     type="button"
@@ -734,9 +740,9 @@ export const GeminiAssistantModal: React.FC<{
             <div className="w-full flex items-center justify-between text-xs border-b border-zinc-800 pb-3">
               <div className="flex items-center gap-2">
                 <Radio className="w-4 h-4 text-rose-500 animate-pulse" />
-                <span className="font-extrabold text-white">Live API Voice Engine</span>
+                <span className="font-extrabold text-white">DIGIZORT Live Voice Engine</span>
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                  gemini-3.8-live
+                  digizort-live
                 </span>
               </div>
               <span className="text-[11px] text-zinc-400">16kHz Input • 24kHz Output PCM</span>
@@ -755,27 +761,31 @@ export const GeminiAssistantModal: React.FC<{
                   className="absolute w-48 h-48 sm:w-56 sm:h-56 rounded-full bg-gradient-to-tr from-rose-600 via-amber-500 to-red-600 blur-2xl pointer-events-none"
                 />
 
-                {/* Orb Core */}
+                {/* Orb Core with Living Animated DIGIZORT AI Avatar */}
                 <div
-                  className={`relative w-28 h-28 sm:w-36 sm:h-36 rounded-full flex items-center justify-center shadow-2xl transition-all ${
+                  className={`relative w-32 h-32 sm:w-40 sm:h-40 rounded-full flex flex-col items-center justify-center shadow-2xl transition-all ${
                     liveStatus === 'speaking'
-                      ? 'bg-gradient-to-tr from-amber-500 to-rose-600 shadow-rose-500/50 scale-105 ring-4 ring-rose-400/50'
+                      ? 'bg-gradient-to-tr from-sky-500/20 to-zinc-900 shadow-sky-500/50 scale-105 ring-4 ring-sky-400/50'
                       : liveStatus === 'connected'
-                      ? 'bg-gradient-to-tr from-rose-600 to-zinc-800 shadow-rose-900/50'
+                      ? 'bg-gradient-to-tr from-cyan-600/20 to-zinc-900 shadow-cyan-900/50 ring-2 ring-cyan-500/40'
                       : liveStatus === 'connecting'
-                      ? 'bg-zinc-800 animate-pulse'
-                      : 'bg-zinc-850'
+                      ? 'bg-zinc-800 animate-pulse ring-2 ring-purple-500/30'
+                      : 'bg-zinc-850/80 border border-zinc-850'
                   }`}
                 >
-                  {liveStatus === 'connecting' ? (
-                    <Loader2 className="w-10 h-10 text-rose-400 animate-spin" />
-                  ) : liveStatus === 'speaking' ? (
-                    <Volume2 className="w-12 h-12 text-white animate-pulse" />
-                  ) : liveStatus === 'connected' ? (
-                    <Mic className="w-12 h-12 text-white" />
-                  ) : (
-                    <MicOff className="w-12 h-12 text-zinc-500" />
-                  )}
+                  <RobotAIAvatarSVG
+                    state={
+                      liveStatus === 'speaking'
+                        ? 'speaking'
+                        : liveStatus === 'connected'
+                        ? 'listening'
+                        : liveStatus === 'connecting'
+                        ? 'thinking'
+                        : 'idle'
+                    }
+                    size="lg"
+                    showStateLabel={true}
+                  />
                 </div>
               </div>
 
@@ -789,13 +799,13 @@ export const GeminiAssistantModal: React.FC<{
                       ? 'Microphone Muted'
                       : 'Listening... Speak naturally!'
                     : liveStatus === 'connecting'
-                    ? 'Connecting to Gemini 3.8 Live API...'
+                    ? 'Connecting to DIGIZORT Live Voice...'
                     : 'Real-Time Voice Ready'}
                 </h4>
                 <p className="text-xs text-zinc-400 max-w-sm">
                   {liveStatus === 'connected' || liveStatus === 'speaking'
                     ? 'Real-time bidirectional speech conversation with ultra-low latency.'
-                    : 'Tap "Start Voice Conversation" to talk directly with DIGIZORT AI using gemini-3.8-live.'}
+                    : 'Tap "Start Voice Conversation" to talk directly with DIGIZORT AI using digizort-live.'}
                 </p>
               </div>
 
