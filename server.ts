@@ -1,7 +1,6 @@
 import express from 'express';
 import http from 'http';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -14,17 +13,19 @@ import chatHandler from './api/chat';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+function getGeminiApiKey(): string | null {
+  const key =
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENAI_API_KEY ||
+    process.env.VITE_GEMINI_API_KEY ||
+    process.env.VITE_GOOGLE_API_KEY;
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
+  if (key && typeof key === 'string' && key.trim().length > 0) {
+    return key.trim();
+  }
+  return null;
+}
 
 async function startServer() {
   const app = express();
@@ -76,6 +77,28 @@ async function startServer() {
     });
 
     try {
+      const apiKey = getGeminiApiKey();
+      if (!apiKey) {
+        clientWs.send(
+          JSON.stringify({
+            error:
+              'DIGIZORT Voice AI notice: Missing GEMINI_API_KEY environment variable. Please configure GEMINI_API_KEY in your environment to enable real-time voice.',
+          })
+        );
+        clientWs.close();
+        return;
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        vertexai: false,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
       session = await ai.live.connect({
         model: 'gemini-3.8-live',
         config: {

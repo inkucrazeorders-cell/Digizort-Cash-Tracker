@@ -11,7 +11,7 @@ export type PageContextType =
   | 'announcements'
   | 'general';
 
-export type RobotState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'help_available';
+export type RobotState = 'idle' | 'activating' | 'listening' | 'thinking' | 'speaking' | 'help_available';
 
 export interface ProactivePromptState {
   isOpen: boolean;
@@ -42,6 +42,7 @@ interface ProactiveAIContextType {
   // Modal Control
   isAssistantOpen: boolean;
   setIsAssistantOpen: (open: boolean) => void;
+  openAssistantWithAnimation: (options?: { mode?: 'chat' | 'live'; message?: string }) => void;
   assistantInitialTab: 'chat' | 'live';
   assistantInitialMessage: string | null;
 
@@ -308,22 +309,43 @@ export const ProactiveAIProvider: React.FC<{ children: React.ReactNode }> = ({ c
     recordAnalyticsEvent('helpDismissed');
   };
 
+  // Open Assistant with Professional Wake-Up Animation Sequence (Prompt Section: Opening Animation)
+  const openAssistantWithAnimation = (options?: { mode?: 'chat' | 'live'; message?: string }) => {
+    // 1. Avatar wakes up immediately with activation pulse
+    setRobotState('activating');
+
+    if (options?.mode) {
+      setAssistantInitialTab(options.mode);
+    }
+    if (options?.message !== undefined) {
+      setAssistantInitialMessage(options.message);
+    }
+
+    // 2. Chat panel expands smoothly into view after 180ms
+    setTimeout(() => {
+      setIsAssistantOpen(true);
+
+      // 3. Once chat is open and welcome begins, transition to idle or voice listening
+      setTimeout(() => {
+        setRobotState(options?.mode === 'live' ? 'listening' : 'idle');
+      }, 350);
+    }, 180);
+  };
+
   // Accept Help
   const acceptHelp = (mode: 'chat' | 'live' | 'voice' = 'chat', customMessage?: string) => {
     setPromptState((prev) => ({ ...prev, isOpen: false }));
     recordAnalyticsEvent('helpAccepted');
 
-    if (mode === 'live' || mode === 'voice') {
+    const isVoice = mode === 'live' || mode === 'voice';
+    if (isVoice) {
       recordAnalyticsEvent('voiceAssistanceUsed');
-      setAssistantInitialTab('live');
-      setAssistantInitialMessage(null);
-    } else {
-      setAssistantInitialTab('chat');
-      setAssistantInitialMessage(customMessage || promptState.suggestedPrompt);
     }
 
-    setIsAssistantOpen(true);
-    setRobotState('idle');
+    openAssistantWithAnimation({
+      mode: isVoice ? 'live' : 'chat',
+      message: customMessage || (isVoice ? undefined : promptState.suggestedPrompt),
+    });
   };
 
   return (
@@ -338,6 +360,7 @@ export const ProactiveAIProvider: React.FC<{ children: React.ReactNode }> = ({ c
         acceptHelp,
         isAssistantOpen,
         setIsAssistantOpen,
+        openAssistantWithAnimation,
         assistantInitialTab,
         assistantInitialMessage,
         robotState,

@@ -61,11 +61,15 @@ const MainViewRouter: React.FC = () => {
       {/* DIGIZORT Proactive Robot AI Launcher & Prompt (Section 3 & 4) */}
       {appMode !== 'auth' && <ProactiveAILauncher />}
 
-      {/* Gemini Assistant & Live Voice Modal */}
-      <GeminiAssistantModal
-        isOpen={isAssistantOpen}
-        onClose={() => setIsAssistantOpen(false)}
-      />
+      {/* DIGIZORT AI Assistant & Live Voice Modal with AnimatePresence */}
+      <AnimatePresence>
+        {isAssistantOpen && (
+          <GeminiAssistantModal
+            isOpen={isAssistantOpen}
+            onClose={() => setIsAssistantOpen(false)}
+          />
+        )}
+      </AnimatePresence>
     </>
   );
 };

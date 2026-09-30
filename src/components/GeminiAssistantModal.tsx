@@ -122,6 +122,29 @@ export const GeminiAssistantModal: React.FC<{
     isMutedRef.current = isMuted;
   }, [isMuted]);
 
+  // --- AI Welcome Animation & Awakening Sequence ---
+  const [isAwakening, setIsAwakening] = useState(true);
+  const [isWelcomeRevealed, setIsWelcomeRevealed] = useState(false);
+
+  useEffect(() => {
+    // When modal mounts:
+    // 1. Panel is expanding (0ms-300ms)
+    // 2. Avatar inside header activates and wakes up
+    // 3. Welcome greeting is smoothly revealed
+    const welcomeTimer = setTimeout(() => {
+      setIsWelcomeRevealed(true);
+    }, 280);
+
+    const readyTimer = setTimeout(() => {
+      setIsAwakening(false);
+    }, 550);
+
+    return () => {
+      clearTimeout(welcomeTimer);
+      clearTimeout(readyTimer);
+    };
+  }, []);
+
   // Synchronize modal tab and pre-filled message with proactive AI choices
   useEffect(() => {
     if (isOpen) {
@@ -139,6 +162,7 @@ export const GeminiAssistantModal: React.FC<{
   // Sync robot avatar animation state
   useEffect(() => {
     if (!isOpen) return;
+    if (isAwakening) return; // Keep awakening state active during initial wake up
     if (liveStatus === 'speaking') {
       setRobotState('speaking');
     } else if (liveStatus === 'connected') {
@@ -148,7 +172,7 @@ export const GeminiAssistantModal: React.FC<{
     } else {
       setRobotState('idle');
     }
-  }, [liveStatus, isSending, isOpen, setRobotState]);
+  }, [liveStatus, isSending, isOpen, isAwakening, setRobotState]);
 
   // Scroll chat to bottom
   useEffect(() => {
@@ -224,10 +248,14 @@ export const GeminiAssistantModal: React.FC<{
         setRobotState('idle');
       }, 2400);
     } catch (err: any) {
+      let rawText = err?.message || 'Unable to connect to DIGIZORT AI. Please verify server connection.';
+      if (rawText.includes('Could not load the default credentials')) {
+        rawText = 'Missing GEMINI_API_KEY environment variable. Please configure GEMINI_API_KEY in your Vercel Project Settings → Environment Variables to enable DIGIZORT AI.';
+      }
       const errorMsg: ChatMessage = {
         id: String(Date.now() + 1),
         role: 'model',
-        content: `⚠️ Error: ${err?.message || 'Unable to connect to DIGIZORT AI. Please verify server connection.'}`,
+        content: rawText.startsWith('⚠️') ? rawText : `⚠️ ${rawText}`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, errorMsg]);
@@ -313,13 +341,33 @@ export const GeminiAssistantModal: React.FC<{
 
     try {
       // 1. Initialize Microphones
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 16000,
-        },
-      });
+      if (typeof window === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Microphone access is not supported in this browser or context (requires HTTPS).');
+      }
+
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      } catch (mediaErr: any) {
+        const isPermIssue =
+          mediaErr?.name === 'NotAllowedError' ||
+          mediaErr?.name === 'PermissionDeniedError' ||
+          mediaErr?.name === 'SecurityError' ||
+          mediaErr?.message?.toLowerCase().includes('permission') ||
+          mediaErr?.message?.toLowerCase().includes('denied') ||
+          mediaErr?.message?.toLowerCase().includes('not allowed');
+
+        if (isPermIssue) {
+          throw mediaErr;
+        }
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
       streamRef.current = stream;
 
       const inputAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
@@ -370,13 +418,13 @@ export const GeminiAssistantModal: React.FC<{
             setLiveError(msg.error);
           }
         } catch (e) {
-          console.error('WebSocket message parsing error:', e);
+          console.warn('WebSocket message parsing error:', e);
         }
       };
 
       ws.onerror = (e) => {
-        console.error('WebSocket connection error:', e);
-        setLiveError('WebSocket connection failed. Ensure server is running.');
+        console.warn('WebSocket connection error:', e);
+        setLiveError('Live Voice connection could not be established. Ensure server is running or switch to Chat.');
         setLiveStatus('disconnected');
       };
 
@@ -410,8 +458,23 @@ export const GeminiAssistantModal: React.FC<{
       source.connect(processor);
       processor.connect(inputAudioCtx.destination);
     } catch (err: any) {
-      console.error('Error starting live session:', err);
-      setLiveError(err?.message || 'Could not access microphone or connect to Live API.');
+      const isPermissionDenied =
+        err?.name === 'NotAllowedError' ||
+        err?.name === 'PermissionDeniedError' ||
+        err?.name === 'SecurityError' ||
+        err?.message?.toLowerCase().includes('permission') ||
+        err?.message?.toLowerCase().includes('denied') ||
+        err?.message?.toLowerCase().includes('not allowed');
+
+      if (isPermissionDenied) {
+        console.warn('Microphone permission not granted:', err?.message || err);
+        setLiveError(
+          'Microphone permission is required for Live Voice. Please allow microphone access in your browser (check the 🔒 or 🎙️ icon in your address bar), or continue with text chat.'
+        );
+      } else {
+        console.warn('Voice live session error:', err?.message || err);
+        setLiveError(err?.message || 'Could not access microphone or connect to Live API.');
+      }
       setLiveStatus('disconnected');
       stopLiveSession();
     }
@@ -450,27 +513,46 @@ export const GeminiAssistantModal: React.FC<{
     setAudioLevel(0);
   };
 
-  if (!isOpen) return null;
+  const handleClose = () => {
+    stopLiveSession();
+    setRobotState('idle');
+    onClose();
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-zinc-950/80 backdrop-blur-md overflow-hidden">
+    <motion.div
+      key="digizort-assistant-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.25, ease: 'easeInOut' }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-zinc-950/80 backdrop-blur-md overflow-hidden"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          handleClose();
+        }
+      }}
+    >
       <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 15 }}
+        key="digizort-assistant-panel"
+        initial={{ opacity: 0, scale: 0.97, y: 16 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 15 }}
+        exit={{ opacity: 0, scale: 0.97, y: 12 }}
+        transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
         className="w-full max-w-2xl bg-zinc-900 border border-zinc-800 rounded-3xl shadow-2xl flex flex-col h-[90vh] max-h-[820px] overflow-hidden"
       >
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-zinc-800 flex items-center justify-between gap-3 bg-zinc-900/90 backdrop-blur-md shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-zinc-950 border border-zinc-800/80 flex items-center justify-center text-white shadow-lg shadow-black/40 overflow-hidden shrink-0">
-              <RobotAIAvatarSVG state={robotState} size="sm" />
+              <RobotAIAvatarSVG state={isAwakening ? 'activating' : robotState} size="sm" />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-extrabold text-white">DIGIZORT AI Studio</h3>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                  Digizort AI
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500/20 text-rose-300 border border-rose-500/30 flex items-center gap-1">
+                  {isAwakening && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />}
+                  <span>{isAwakening ? 'Digizort AI (Ready)' : 'Digizort AI'}</span>
                 </span>
               </div>
               <p className="text-xs text-zinc-400">
@@ -512,7 +594,7 @@ export const GeminiAssistantModal: React.FC<{
             </div>
 
             <button
-              onClick={onClose}
+              onClick={handleClose}
               className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
               title="Close Assistant"
             >
@@ -606,9 +688,19 @@ export const GeminiAssistantModal: React.FC<{
             <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
               {messages.map((m) => {
                 const isUser = m.role === 'user';
+                const isWelcome = m.id === 'welcome';
                 return (
-                  <div
+                  <motion.div
                     key={m.id}
+                    initial={isWelcome ? { opacity: 0, y: 12, scale: 0.98 } : { opacity: 0, y: 6 }}
+                    animate={
+                      isWelcome
+                        ? isWelcomeRevealed
+                          ? { opacity: 1, y: 0, scale: 1 }
+                          : { opacity: 0, y: 12, scale: 0.98 }
+                        : { opacity: 1, y: 0 }
+                    }
+                    transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
                     className={`flex items-start gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
                   >
                     <div
@@ -651,7 +743,7 @@ export const GeminiAssistantModal: React.FC<{
                         {m.timestamp}
                       </span>
                     </div>
-                  </div>
+                  </motion.div>
                 );
               })}
 
@@ -662,7 +754,9 @@ export const GeminiAssistantModal: React.FC<{
                   </div>
                   <div className="p-3.5 rounded-2xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-400 flex items-center gap-2">
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-400" />
-                    <span>Gemini is thinking ({model})...</span>
+                    <span>
+                      Digizort AI is thinking({model === 'gemini-3.5-flash' ? 'digizort-flash' : model === 'gemini-3.1-flash-lite' ? 'digizort-lite' : 'digizort-pro'})...
+                    </span>
                   </div>
                 </div>
               )}
@@ -810,9 +904,30 @@ export const GeminiAssistantModal: React.FC<{
               </div>
 
               {liveError && (
-                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300 flex items-center gap-2 max-w-md">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
-                  <span>{liveError}</span>
+                <div className="p-3.5 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300 flex flex-col gap-2.5 max-w-md w-full">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                    <span className="leading-relaxed">{liveError}</span>
+                  </div>
+                  <div className="flex items-center gap-2 pt-2 border-t border-rose-500/20">
+                    <button
+                      type="button"
+                      onClick={startLiveSession}
+                      className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-[11px] font-bold transition-colors"
+                    >
+                      Try Again
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopLiveSession();
+                        setActiveTab('chat');
+                      }}
+                      className="px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-[11px] font-bold transition-colors"
+                    >
+                      Switch to Chat
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -857,6 +972,6 @@ export const GeminiAssistantModal: React.FC<{
           </div>
         )}
       </motion.div>
-    </div>
+    </motion.div>
   );
 };

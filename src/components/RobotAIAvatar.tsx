@@ -28,9 +28,12 @@ export const RobotAIAvatarSVG: React.FC<RobotAvatarProps> = ({
   const isListening = state === 'listening';
   const isThinking = state === 'thinking';
   const isHelp = state === 'help_available';
+  const isActivating = state === 'activating';
 
   // State-specific color accents
-  const accentColor = isListening
+  const accentColor = isActivating
+    ? '#10b981'
+    : isListening
     ? '#06b6d4'
     : isThinking
     ? '#a855f7'
@@ -47,7 +50,9 @@ export const RobotAIAvatarSVG: React.FC<RobotAvatarProps> = ({
         className="relative flex items-center justify-center"
         style={{ width: dim, height: dim }}
         animate={
-          isSpeaking
+          isActivating
+            ? { scale: [1, 1.14, 1.02], y: [0, -4, 0], rotate: [0, -1.5, 1.5, 0] }
+            : isSpeaking
             ? { y: [0, -2, 0, -1.5, 0], scale: [1, 1.03, 1] }
             : isListening
             ? { y: [0, -1.8, 0], scale: [1, 1.025, 1] }
@@ -58,12 +63,19 @@ export const RobotAIAvatarSVG: React.FC<RobotAvatarProps> = ({
             : { y: [0, -2.5, 0], rotate: [0, 0.8, 0, -0.8, 0] } // idle floating & slight head tilt
         }
         transition={{
-          duration: isSpeaking ? 1.4 : isThinking ? 2.4 : isHelp ? 1.8 : 4.0,
-          repeat: Infinity,
+          duration: isActivating ? 0.35 : isSpeaking ? 1.4 : isThinking ? 2.4 : isHelp ? 1.8 : 4.0,
+          repeat: isActivating ? 1 : Infinity,
           ease: 'easeInOut',
         }}
       >
-        {/* Soft Pulsing Ambient / Reaction Ring (Section 2, 4, 5) */}
+        {/* Soft Pulsing Ambient / Reaction Ring (Section 2, 4, 5, Opening) */}
+        {isActivating && (
+          <motion.div
+            className="absolute -inset-3 rounded-full border-2 border-emerald-400 bg-emerald-500/25 pointer-events-none"
+            animate={{ scale: [1, 1.5, 1.1], opacity: [0.95, 0.2, 0.8] }}
+            transition={{ duration: 0.35, ease: 'easeOut' }}
+          />
+        )}
         {isListening && (
           <motion.div
             className="absolute -inset-2 rounded-full border border-cyan-400/40 bg-cyan-500/10 pointer-events-none"
@@ -119,7 +131,9 @@ export const RobotAIAvatarSVG: React.FC<RobotAvatarProps> = ({
             cy="7"
             r="5"
             className={
-              isListening
+              isActivating
+                ? 'fill-emerald-300 animate-ping'
+                : isListening
                 ? 'fill-cyan-400 animate-pulse'
                 : isSpeaking
                 ? 'fill-sky-400 animate-pulse'
@@ -174,8 +188,16 @@ export const RobotAIAvatarSVG: React.FC<RobotAvatarProps> = ({
             strokeLinecap="round"
           />
 
-          {/* --- LIVING EYES SYSTEM (Section 1, 2, 3, 4, 5) --- */}
-          {isListening ? (
+          {/* --- LIVING EYES SYSTEM (Section 1, 2, 3, 4, 5, Activating) --- */}
+          {isActivating ? (
+            // Power-on wake-up flare
+            <g className="animate-pulse">
+              <ellipse cx="39" cy="46" rx="7" ry="8" fill="#34d399" />
+              <circle cx="39" cy="46" r="3.5" fill="#ffffff" />
+              <ellipse cx="61" cy="46" rx="7" ry="8" fill="#34d399" />
+              <circle cx="61" cy="46" r="3.5" fill="#ffffff" />
+            </g>
+          ) : isListening ? (
             // Concentric listening wave rings
             <g>
               <circle cx="39" cy="48" r="7" fill="#06b6d4" className="animate-pulse" />
@@ -266,7 +288,9 @@ export const RobotAIAvatarSVG: React.FC<RobotAvatarProps> = ({
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.85, y: 2 }}
           className={`mt-1.5 px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-sm border ${
-            isListening
+            isActivating
+              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+              : isListening
               ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
               : isThinking
               ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
@@ -277,12 +301,15 @@ export const RobotAIAvatarSVG: React.FC<RobotAvatarProps> = ({
               : 'bg-zinc-800 text-zinc-400 border-zinc-700'
           }`}
         >
+          {isActivating && <Sparkles className="w-2.5 h-2.5 animate-spin text-emerald-400" />}
           {isListening && <Mic className="w-2.5 h-2.5 animate-pulse text-cyan-400" />}
           {isThinking && <Sparkles className="w-2.5 h-2.5 animate-spin text-purple-400" style={{ animationDuration: '3s' }} />}
           {isSpeaking && <Volume2 className="w-2.5 h-2.5 animate-bounce text-sky-400" />}
           {isHelp && <Sparkles className="w-2.5 h-2.5 text-amber-400" />}
           <span>
-            {isListening
+            {isActivating
+              ? 'WAKING UP...'
+              : isListening
               ? 'LISTENING...'
               : isThinking
               ? 'THINKING...'
@@ -304,6 +331,7 @@ export const ProactiveAILauncher: React.FC = () => {
     dismissPrompt,
     acceptHelp,
     setIsAssistantOpen,
+    openAssistantWithAnimation,
     robotState,
     adminConfig,
   } = useProactiveAI();
@@ -396,11 +424,15 @@ export const ProactiveAILauncher: React.FC = () => {
         )}
       </AnimatePresence>
 
-      {/* Floating Robot Launcher Button */}
+      {/* Floating Robot Launcher Button with Wake-Up Reaction (Opening Animation) */}
       <button
         type="button"
-        onClick={() => setIsAssistantOpen(true)}
-        className="pointer-events-auto group relative flex items-center gap-2.5 p-2 sm:px-4 sm:py-2.5 bg-gradient-to-r from-zinc-900 via-zinc-900 to-zinc-950 hover:brightness-110 text-white font-extrabold text-xs rounded-2xl shadow-xl shadow-black/50 border border-zinc-700/80 hover:border-rose-500/50 transition-all active:scale-95"
+        onClick={() => openAssistantWithAnimation()}
+        className={`pointer-events-auto group relative flex items-center gap-2.5 p-2 sm:px-4 sm:py-2.5 bg-gradient-to-r from-zinc-900 via-zinc-900 to-zinc-950 hover:brightness-110 text-white font-extrabold text-xs rounded-2xl shadow-xl transition-all active:scale-95 ${
+          currentDisplayState === 'activating'
+            ? 'scale-[1.05] border-emerald-500/80 shadow-emerald-500/25 ring-2 ring-emerald-500/40'
+            : 'shadow-black/50 border border-zinc-700/80 hover:border-rose-500/50'
+        }`}
         id="btn-open-gemini-assistant"
         title="Open DIGIZORT AI Assistant & Live Voice"
       >
@@ -414,7 +446,12 @@ export const ProactiveAILauncher: React.FC = () => {
         <div className="hidden sm:flex flex-col text-left">
           <div className="flex items-center gap-1.5">
             <span className="text-xs font-black text-white">DIGIZORT AI</span>
-            {currentDisplayState === 'listening' ? (
+            {currentDisplayState === 'activating' ? (
+              <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                WAKING UP...
+              </span>
+            ) : currentDisplayState === 'listening' ? (
               <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black uppercase bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 animate-pulse">
                 LISTENING...
               </span>
@@ -432,7 +469,9 @@ export const ProactiveAILauncher: React.FC = () => {
           </div>
 
           <span className="text-[10px] text-zinc-400 font-medium -mt-0.5">
-            {currentDisplayState === 'help_available'
+            {currentDisplayState === 'activating'
+              ? 'Waking up DIGIZORT AI...'
+              : currentDisplayState === 'help_available'
               ? 'Need help? Click me'
               : currentDisplayState === 'listening'
               ? 'Listening to your voice...'
