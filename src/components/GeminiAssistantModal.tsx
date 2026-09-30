@@ -291,14 +291,22 @@ export const GeminiAssistantModal: React.FC<{
         setRobotState('idle');
       }, 2400);
     } catch (err: any) {
-      let rawText = err?.message || 'DIGIZORT AI couldn\'t complete that request.';
-      if (rawText.includes('Could not load the default credentials')) {
-        rawText = 'Missing GEMINI_API_KEY environment variable. Please configure GEMINI_API_KEY in your Vercel Project Settings → Environment Variables to enable DIGIZORT AI.';
+      console.warn('DIGIZORT AI chat error:', err?.message || err);
+      let rawText = err?.message || 'DIGIZORT AI is temporarily unavailable. Please try again in a moment.';
+      if (
+        rawText.includes('Could not load the default credentials') ||
+        rawText.includes('GEMINI_API_KEY') ||
+        rawText.includes('GOOGLE_API_KEY') ||
+        rawText.includes('credentials') ||
+        rawText.includes('API key') ||
+        rawText.includes('Vercel')
+      ) {
+        rawText = 'DIGIZORT AI is temporarily unavailable. Please try again in a moment.';
       }
       const errorMsg: ChatMessage = {
         id: String(Date.now() + 1),
         role: 'model',
-        content: `⚠️ ${rawText}`,
+        content: rawText.startsWith('🤖') ? rawText : `🤖 ${rawText}`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, errorMsg]);

@@ -83,12 +83,12 @@ export default async function chatHandler(req: Request, res: Response) {
   const apiKey = getGeminiApiKey();
   const saCredentials = getServiceAccountCredentials();
 
-  // If neither an API key nor Service Account is found, return a clear, actionable error
-  // instead of allowing @google/genai to trigger GoogleAuth ADC failure ("Could not load the default credentials")
+  // If neither an API key nor Service Account is found, return a user-friendly message
+  // while logging the technical diagnosis server-side for administrators
   if (!apiKey && !saCredentials) {
+    console.warn('DIGIZORT AI configuration: Missing GEMINI_API_KEY environment variable in server environment.');
     return res.status(503).json({
-      error:
-        'AI service configuration notice: Missing GEMINI_API_KEY environment variable. Please configure GEMINI_API_KEY (or GOOGLE_API_KEY) in your Vercel Project Settings → Environment Variables to enable DIGIZORT AI chat.',
+      error: '🤖 DIGIZORT AI is temporarily unavailable. Please try again in a moment.',
     });
   }
 
@@ -147,12 +147,14 @@ export default async function chatHandler(req: Request, res: Response) {
       rawMsg.includes('API key not valid') ||
       rawMsg.includes('UNAUTHENTICATED')
     ) {
+      console.warn('Server authentication issue with Gemini API:', rawMsg);
       return res.status(500).json({
-        error:
-          'AI authentication error: Server could not authenticate with Gemini. Please ensure a valid GEMINI_API_KEY or GOOGLE_API_KEY is configured in your Vercel Project Settings → Environment Variables.',
+        error: '🤖 DIGIZORT AI is temporarily unavailable. Please try again in a moment.',
       });
     }
 
-    return res.status(500).json({ error: rawMsg });
+    return res.status(500).json({
+      error: '🤖 DIGIZORT AI is temporarily unavailable. Please try again in a moment.',
+    });
   }
 }

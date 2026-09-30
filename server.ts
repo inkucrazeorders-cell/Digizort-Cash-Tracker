@@ -79,10 +79,10 @@ async function startServer() {
     try {
       const apiKey = getGeminiApiKey();
       if (!apiKey) {
+        console.warn('DIGIZORT Voice AI notice: Missing GEMINI_API_KEY environment variable on server.');
         clientWs.send(
           JSON.stringify({
-            error:
-              'DIGIZORT Voice AI notice: Missing GEMINI_API_KEY environment variable. Please configure GEMINI_API_KEY in your environment to enable real-time voice.',
+            error: '🤖 DIGIZORT Live Voice is temporarily unavailable. Please try again in a moment.',
           })
         );
         clientWs.close();
