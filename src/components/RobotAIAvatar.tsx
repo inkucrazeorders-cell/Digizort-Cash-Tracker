@@ -330,38 +330,39 @@ export const ProactiveAILauncher: React.FC = () => {
     promptState,
     dismissPrompt,
     acceptHelp,
-    setIsAssistantOpen,
     openAssistantWithAnimation,
     robotState,
     adminConfig,
   } = useProactiveAI();
 
   const currentDisplayState: RobotState = promptState.isOpen ? 'help_available' : robotState;
+  const isActivating = currentDisplayState === 'activating';
+  const isHelp = currentDisplayState === 'help_available';
 
   return (
-    <div className="fixed bottom-6 right-6 z-40 flex flex-col items-end pointer-events-none">
+    <div className="fixed bottom-5 right-5 sm:bottom-6 sm:right-6 z-40 flex flex-col items-end pointer-events-none select-none">
       {/* Non-Blocking Proactive Speech Bubble (Section 3 & 4 & 5) */}
       <AnimatePresence>
         {promptState.isOpen && (
           <motion.div
-            initial={{ opacity: 0, scale: 0.9, y: 15 }}
+            initial={{ opacity: 0, scale: 0.92, y: 16 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.9, y: 10 }}
-            transition={{ type: 'spring', stiffness: 350, damping: 25 }}
-            className="pointer-events-auto mb-3 w-[92vw] max-w-sm sm:max-w-md bg-zinc-900/95 backdrop-blur-xl border border-amber-500/40 rounded-3xl p-4 sm:p-5 shadow-2xl shadow-black/60 relative overflow-hidden"
+            exit={{ opacity: 0, scale: 0.94, y: 8, transition: { duration: 0.2 } }}
+            transition={{ type: 'spring', stiffness: 380, damping: 28 }}
+            className="pointer-events-auto mb-3 w-[92vw] max-w-sm sm:max-w-md bg-zinc-950/95 backdrop-blur-2xl border border-amber-500/40 rounded-3xl p-4 sm:p-5 shadow-[0_20px_50px_rgba(0,0,0,0.7)] relative overflow-hidden"
             role="dialog"
             aria-live="polite"
           >
-            {/* Glow accent */}
+            {/* Subtle glow accent */}
             <div className="absolute -top-12 -right-12 w-28 h-28 bg-amber-500/15 rounded-full blur-2xl pointer-events-none" />
 
             <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0 shadow-inner">
                   <RobotAIAvatarSVG state="help_available" size="sm" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-2">
                     <h4 className="text-xs font-black uppercase tracking-wider text-amber-400">
                       {promptState.title}
                     </h4>
@@ -374,7 +375,7 @@ export const ProactiveAILauncher: React.FC = () => {
               <button
                 type="button"
                 onClick={dismissPrompt}
-                className="p-1.5 rounded-xl bg-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-700 transition-colors shrink-0"
+                className="p-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors shrink-0"
                 title="Dismiss"
               >
                 <X className="w-3.5 h-3.5" />
@@ -382,16 +383,16 @@ export const ProactiveAILauncher: React.FC = () => {
             </div>
 
             {/* Proactive Message */}
-            <p className="text-xs text-zinc-200 leading-relaxed mt-2.5 mb-3.5">
+            <p className="text-xs text-zinc-200 leading-relaxed mt-3 mb-4">
               "{promptState.message}"
             </p>
 
             {/* Action Buttons */}
-            <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-zinc-800/80">
+            <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-zinc-800/80">
               <button
                 type="button"
                 onClick={() => acceptHelp('chat')}
-                className="py-2 px-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 text-black font-extrabold text-xs rounded-xl shadow-md shadow-amber-500/20 transition-all flex items-center gap-1.5 active:scale-95 flex-1 justify-center"
+                className="py-2.5 px-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-110 text-black font-extrabold text-xs rounded-xl shadow-md shadow-amber-500/20 transition-all flex items-center gap-1.5 active:scale-95 flex-1 justify-center"
                 id="btn-proactive-help-me"
               >
                 <Sparkles className="w-3.5 h-3.5 text-black" />
@@ -402,7 +403,7 @@ export const ProactiveAILauncher: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => acceptHelp('live')}
-                  className="py-2 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white font-bold text-xs rounded-xl border border-zinc-700/80 transition-all flex items-center gap-1.5 active:scale-95"
+                  className="py-2.5 px-3.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 hover:text-white font-bold text-xs rounded-xl border border-zinc-800 transition-all flex items-center gap-1.5 active:scale-95"
                   title="Talk directly with DIGIZORT AI in voice mode"
                   id="btn-proactive-voice-help"
                 >
@@ -414,7 +415,7 @@ export const ProactiveAILauncher: React.FC = () => {
               <button
                 type="button"
                 onClick={dismissPrompt}
-                className="py-2 px-3 bg-zinc-850 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 font-medium text-xs rounded-xl transition-colors"
+                className="py-2.5 px-3 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 font-medium text-xs rounded-xl transition-colors"
                 id="btn-proactive-dismiss"
               >
                 I'll Continue
@@ -424,19 +425,65 @@ export const ProactiveAILauncher: React.FC = () => {
         )}
       </AnimatePresence>
 
-      {/* Floating Robot Launcher Button with Wake-Up Reaction (Opening Animation) */}
-      <button
+      {/* Modern DIGIZORT AI V2 Launcher with Living Motion System */}
+      <motion.button
         type="button"
         onClick={() => openAssistantWithAnimation()}
-        className={`pointer-events-auto group relative flex items-center gap-2.5 p-2 sm:px-4 sm:py-2.5 bg-gradient-to-r from-zinc-900 via-zinc-900 to-zinc-950 hover:brightness-110 text-white font-extrabold text-xs rounded-2xl shadow-xl transition-all active:scale-95 ${
-          currentDisplayState === 'activating'
-            ? 'scale-[1.05] border-emerald-500/80 shadow-emerald-500/25 ring-2 ring-emerald-500/40'
-            : 'shadow-black/50 border border-zinc-700/80 hover:border-rose-500/50'
+        animate={
+          isActivating
+            ? {
+                scale: [1, 0.95, 1.05, 1],
+                y: [0, 2, -6, 0],
+                boxShadow: '0 0 35px rgba(16, 185, 129, 0.45)',
+              }
+            : isHelp
+            ? {
+                y: [0, -3, 0],
+                boxShadow: [
+                  '0 10px 25px -5px rgba(245, 158, 11, 0.25)',
+                  '0 14px 28px -5px rgba(245, 158, 11, 0.4)',
+                  '0 10px 25px -5px rgba(245, 158, 11, 0.25)',
+                ],
+              }
+            : {
+                y: [0, -3.5, 0],
+                boxShadow: [
+                  '0 12px 30px -6px rgba(0, 0, 0, 0.55)',
+                  '0 18px 36px -6px rgba(0, 0, 0, 0.7)',
+                  '0 12px 30px -6px rgba(0, 0, 0, 0.55)',
+                ],
+              }
+        }
+        transition={
+          isActivating
+            ? { duration: 0.4, ease: 'easeOut' }
+            : { duration: 4.5, repeat: Infinity, ease: 'easeInOut' }
+        }
+        whileHover={{
+          y: -5,
+          scale: 1.025,
+          boxShadow: '0 20px 40px -10px rgba(225, 29, 72, 0.25)',
+          transition: { duration: 0.2, ease: 'easeOut' },
+        }}
+        whileTap={{
+          scale: 0.95,
+          y: 1,
+          transition: { duration: 0.1 },
+        }}
+        className={`pointer-events-auto group relative flex items-center gap-3 p-2.5 sm:px-4 sm:py-3 bg-zinc-950/90 backdrop-blur-2xl text-white font-extrabold text-xs rounded-2xl transition-colors border ${
+          isActivating
+            ? 'border-emerald-500/80 ring-2 ring-emerald-500/40 bg-zinc-950'
+            : isHelp
+            ? 'border-amber-500/60 ring-1 ring-amber-500/30'
+            : 'border-zinc-800/90 hover:border-rose-500/50 hover:bg-zinc-900/95'
         }`}
         id="btn-open-gemini-assistant"
         title="Open DIGIZORT AI Assistant & Live Voice"
       >
-        <div className="relative">
+        {/* Subtle living ambient light sweep on border */}
+        <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-transparent via-white/[0.04] to-transparent pointer-events-none" />
+
+        <div className="relative shrink-0">
           <RobotAIAvatarSVG state={currentDisplayState} size="sm" />
           {promptState.isOpen && (
             <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-400 ring-2 ring-zinc-950 animate-ping" />
@@ -444,35 +491,44 @@ export const ProactiveAILauncher: React.FC = () => {
         </div>
 
         <div className="hidden sm:flex flex-col text-left">
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-black text-white">DIGIZORT AI</span>
-            {currentDisplayState === 'activating' ? (
-              <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse flex items-center gap-1">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-black tracking-tight text-white group-hover:text-rose-200 transition-colors">
+              DIGIZORT AI
+            </span>
+            {isActivating ? (
+              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                WAKING UP...
+                ACTIVATING
               </span>
             ) : currentDisplayState === 'listening' ? (
-              <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black uppercase bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 animate-pulse">
-                LISTENING...
+              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 animate-pulse">
+                LISTENING
               </span>
             ) : currentDisplayState === 'thinking' ? (
-              <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black uppercase bg-purple-500/20 text-purple-300 border border-purple-500/40 animate-pulse">
-                THINKING...
+              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase bg-purple-500/20 text-purple-300 border border-purple-500/40 animate-pulse">
+                THINKING
               </span>
             ) : currentDisplayState === 'speaking' ? (
-              <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black uppercase bg-sky-500/20 text-sky-300 border border-sky-500/40 animate-pulse">
-                SPEAKING...
+              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase bg-sky-500/20 text-sky-300 border border-sky-500/40 animate-pulse">
+                SPEAKING
+              </span>
+            ) : isHelp ? (
+              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
+                HELP
               </span>
             ) : (
-              <Sparkles className="w-3 h-3 text-amber-400" />
+              <span className="px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                <span className="w-1 h-1 rounded-full bg-emerald-400" />
+                ONLINE
+              </span>
             )}
           </div>
 
-          <span className="text-[10px] text-zinc-400 font-medium -mt-0.5">
-            {currentDisplayState === 'activating'
+          <span className="text-[11px] text-zinc-400 font-medium tracking-tight mt-0.5">
+            {isActivating
               ? 'Waking up DIGIZORT AI...'
-              : currentDisplayState === 'help_available'
-              ? 'Need help? Click me'
+              : isHelp
+              ? 'Need assistance? Click here'
               : currentDisplayState === 'listening'
               ? 'Listening to your voice...'
               : currentDisplayState === 'thinking'
@@ -482,7 +538,12 @@ export const ProactiveAILauncher: React.FC = () => {
               : 'Chat & Voice Assistant'}
           </span>
         </div>
-      </button>
+
+        {/* Subtle right sparkle icon */}
+        <div className="hidden sm:flex items-center pl-1 text-zinc-500 group-hover:text-rose-400 transition-colors">
+          <Sparkles className="w-3.5 h-3.5" />
+        </div>
+      </motion.button>
     </div>
   );
 };
