@@ -7,6 +7,8 @@ import { AdminPanel } from './components/AdminPanel';
 import { SplashLoadingScreen } from './components/SplashLoadingScreen';
 import { GeminiAssistantModal } from './components/GeminiAssistantModal';
 import { ProactiveAILauncher } from './components/RobotAIAvatar';
+import { WhatsAppModal } from './components/WhatsAppModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { motion, AnimatePresence } from 'motion/react';
 
 const MainViewRouter: React.FC = () => {
@@ -60,6 +62,9 @@ const MainViewRouter: React.FC = () => {
 
       {/* DIGIZORT Proactive Robot AI Launcher & Prompt (Section 3 & 4) */}
       {appMode !== 'auth' && <ProactiveAILauncher />}
+
+      {/* DIGIZORT WhatsApp & Digital Document Modal */}
+      <WhatsAppModal />
 
       {/* DIGIZORT AI Assistant & Live Voice Modal with AnimatePresence */}
       <AnimatePresence>

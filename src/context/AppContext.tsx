@@ -291,6 +291,12 @@ interface AppContextType {
   // Toast
   toastMessage: string | null;
   showToast: (msg: string) => void;
+
+  // WhatsApp Modal & Target Document State
+  isWhatsAppModalOpen: boolean;
+  setIsWhatsAppModalOpen: (open: boolean) => void;
+  whatsAppTx: OrderRequest | null;
+  setWhatsAppTx: (tx: OrderRequest | null) => void;
 }
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -350,6 +356,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
+  const [whatsAppTx, setWhatsAppTx] = useState<OrderRequest | null>(null);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -4695,6 +4703,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         adminDeleteUser,
         toastMessage,
         showToast,
+        isWhatsAppModalOpen,
+        setIsWhatsAppModalOpen,
+        whatsAppTx,
+        setWhatsAppTx,
       }}
     >
       {children}

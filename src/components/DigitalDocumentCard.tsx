@@ -68,6 +68,7 @@ export const DigitalDocumentCard: React.FC<DigitalDocumentCardProps> = ({
   const [whatsAppErrorMessage, setWhatsAppErrorMessage] = useState<string | null>(null);
   const [sentMessageId, setSentMessageId] = useState<string | null>(null);
   const [isUnregisteredError, setIsUnregisteredError] = useState(false);
+  const [directWhatsAppFallbackUrl, setDirectWhatsAppFallbackUrl] = useState<string>('');
   const [showPinRegister, setShowPinRegister] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [isRegisteringPin, setIsRegisteringPin] = useState(false);
@@ -87,11 +88,16 @@ export const DigitalDocumentCard: React.FC<DigitalDocumentCardProps> = ({
   // User payment verification request modal state
   const [showVerificationModal, setShowVerificationModal] = useState(false);
 
-  const formattedDate = new Date(currentTransaction.createdAt).toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  });
+  const formattedDate = (() => {
+    try {
+      const d = currentTransaction?.createdAt ? new Date(currentTransaction.createdAt) : new Date();
+      return isNaN(d.getTime())
+        ? new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+        : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    } catch {
+      return new Date().toLocaleDateString('en-IN');
+    }
+  })();
 
   const actualAmount = getRequestPrice(currentTransaction);
   const originalAmount = getOriginalPrice(currentTransaction);
@@ -214,34 +220,52 @@ export const DigitalDocumentCard: React.FC<DigitalDocumentCardProps> = ({
 
   // WhatsApp Message Generator
   const generateWhatsAppMessage = () => {
-    let extraCashLine = '';
-    if (customerAvailableCredit > 0) {
-      extraCashLine = `\n🪙 *Extra Cash Pending to Pay:* ${settings.currencySymbol}${customerAvailableCredit.toLocaleString('en-IN')}`;
-    } else if (
-      currentTransaction.extraCashPaid ||
-      (currentTransaction.extraCash && currentTransaction.extraCash > 0) ||
-      userBalInfo.hasTransactions
-    ) {
-      extraCashLine = `\n🪙 *Extra Cash / Store Credit:* Cleared / Fully Paid (${settings.currencySymbol}0)`;
-    }
+    try {
+      const tx = currentTransaction || transaction || ({} as any);
+      let extraCashLine = '';
+      const creditNum = Number(customerAvailableCredit || 0);
+      if (creditNum > 0) {
+        extraCashLine = `\n🪙 *Extra Cash Pending to Pay:* ${settings?.currencySymbol || '₹'}${creditNum.toLocaleString('en-IN')}`;
+      } else if (
+        tx.extraCashPaid ||
+        (tx.extraCash && tx.extraCash > 0) ||
+        userBalInfo?.hasTransactions
+      ) {
+        extraCashLine = `\n🪙 *Extra Cash / Store Credit:* Cleared / Fully Paid (${settings?.currencySymbol || '₹'}0)`;
+      }
 
-    const text = `*DIGIZORT OFFICIAL STATEMENT & CONFIRMATION*
+      const statusText = String(tx.status || 'Pending Review').toUpperCase();
+      const docId = tx.id || 'N/A';
+      const custName = tx.userName || tx.friendName || 'Valued Customer';
+      const custMobile = tx.userMobile || tx.phone || '';
+      const prodName = tx.productName || tx.title || 'Order Service';
+      const purposeText = tx.purpose || tx.category || 'General Request';
+      const symbol = settings?.currencySymbol || '₹';
+      const totalNum = Number(actualAmount || 0).toLocaleString('en-IN');
+      const paidNum = Number(paidAmount || 0).toLocaleString('en-IN');
+      const dueNum = Number(remainingAmount || 0).toLocaleString('en-IN');
+
+      const text = `*DIGIZORT OFFICIAL STATEMENT & CONFIRMATION*
 ━━━━━━━━━━━━━━━━━━━━━
-📄 *Document ID:* #${currentTransaction.id}
-👤 *Customer:* ${currentTransaction.userName} (${currentTransaction.userMobile})
-📦 *Item/Service:* ${currentTransaction.productName}
-🎯 *Purpose:* ${currentTransaction.purpose}
-📊 *Status:* ${currentTransaction.status.toUpperCase()}
+📄 *Document ID:* #${docId}
+👤 *Customer:* ${custName}${custMobile ? ` (${custMobile})` : ''}
+📦 *Item/Service:* ${prodName}
+🎯 *Purpose:* ${purposeText}
+📊 *Status:* ${statusText}
 
-💰 *Total Amount:* ${settings.currencySymbol}${actualAmount.toLocaleString('en-IN')}
-✅ *Paid So Far:* ${settings.currencySymbol}${paidAmount.toLocaleString('en-IN')}
-⏳ *Order Balance Due:* ${settings.currencySymbol}${remainingAmount.toLocaleString('en-IN')}${extraCashLine}
+💰 *Total Amount:* ${symbol}${totalNum}
+✅ *Paid So Far:* ${symbol}${paidNum}
+⏳ *Order Balance Due:* ${symbol}${dueNum}${extraCashLine}
 
 📅 *Date:* ${formattedDate}
 ━━━━━━━━━━━━━━━━━━━━━
 _Track live updates and timeline records on your DIGIZORT User Portal._`;
 
-    return encodeURIComponent(text);
+      return encodeURIComponent(text);
+    } catch (genErr) {
+      console.error('[DigitalDocumentCard] Failed to generate message:', genErr);
+      return encodeURIComponent(`DIGIZORT Order Statement #${transaction?.id || ''} - Status: ${transaction?.status || ''}`);
+    }
   };
 
   // Helper to convert any oklch/oklab/color CSS function to rgb/rgba format for html2canvas
@@ -363,6 +387,7 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
       } else {
         setWhatsAppSendStatus('error');
         setIsUnregisteredError(!!result.isUnregistered);
+        setDirectWhatsAppFallbackUrl(result.directWhatsAppUrl || '');
 
         const errTitle = result.error || 'WhatsApp delivery failed';
         const errDetail = result.details ? `: ${result.details}` : '';
@@ -1152,82 +1177,69 @@ _Track live updates and timeline records on your DIGIZORT User Portal._`;
             <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
             <div className="space-y-1 flex-1">
               <span className="font-bold block text-rose-300">
-                {isUnregisteredError ? 'Sender Number Active on WhatsApp Phone App' : 'WhatsApp Dispatch Error'}
+                {isUnregisteredError ? 'Sender Number Active on WhatsApp App (Meta Code 133010)' : 'WhatsApp Dispatch Error'}
               </span>
               <p className="text-[11px] text-rose-300/90 leading-relaxed font-sans">{whatsAppErrorMessage}</p>
             </div>
           </div>
 
-          {isUnregisteredError ? (
-            <div className="space-y-2 pt-1 border-t border-rose-900/50">
+          <div className="space-y-2 pt-1 border-t border-rose-900/50">
+            {/* 1-Click Direct WhatsApp Send Fallback */}
+            {(() => {
+              const cleanPhone = formatWhatsAppPhone(currentTransaction.userMobile || currentTransaction.phone || '');
+              const directUrl = directWhatsAppFallbackUrl || `https://wa.me/${cleanPhone}?text=${generateWhatsAppMessage()}`;
+              return (
+                <a
+                  href={directUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full py-2.5 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold rounded-xl flex items-center justify-center gap-2 shadow-md shadow-emerald-600/25 transition-all text-xs active:scale-[0.99]"
+                  id="btn-direct-send-fallback"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  <span>Send via WhatsApp App / Web Now (1-Click)</span>
+                </a>
+              );
+            })()}
+
+            {/* Expandable PIN Registration Option */}
+            <div className="pt-0.5">
               <button
                 type="button"
-                onClick={() => {
-                  const encoded = generateWhatsAppMessage();
-                  const cleanPhone = formatWhatsAppPhone(transaction.userMobile || transaction.phone || '');
-                  window.open(`https://wa.me/${cleanPhone}?text=${encoded}`, '_blank');
-                }}
-                className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition-all text-xs active:scale-[0.99]"
-                id="btn-direct-send-fallback"
+                onClick={() => setShowPinRegister(!showPinRegister)}
+                className="text-[11px] text-zinc-400 hover:text-zinc-200 underline flex items-center gap-1"
               >
-                <MessageSquare className="w-3.5 h-3.5" />
-                <span>Send via WhatsApp App Now (+91 8129043397)</span>
+                <span>{showPinRegister ? 'Hide Meta Cloud API registration' : 'Want automated server background sending? Register Meta 6-digit PIN'}</span>
               </button>
 
-              <div className="pt-0.5">
-                <button
-                  type="button"
-                  onClick={() => setShowPinRegister(!showPinRegister)}
-                  className="text-[11px] text-zinc-400 hover:text-zinc-200 underline flex items-center gap-1"
-                >
-                  <span>{showPinRegister ? 'Hide Cloud API PIN registration' : 'Want automated server background sending? Register 6-digit PIN'}</span>
-                </button>
-
-                {showPinRegister && (
-                  <div className="mt-2 p-2.5 rounded-xl bg-black/40 border border-zinc-700/60 space-y-2">
-                    <p className="text-[10px] text-zinc-300">
-                      Enter the 6-digit PIN you created in Meta WhatsApp Manager (or choose a new 6-digit PIN) to register the Cloud API:
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="password"
-                        maxLength={6}
-                        placeholder="6-digit PIN"
-                        value={pinInput}
-                        onChange={(e) => setPinInput(e.target.value.replace(/\D/g, ''))}
-                        className="w-32 bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-white tracking-widest text-center focus:outline-none focus:border-emerald-500"
-                      />
-                      <button
-                        type="button"
-                        disabled={isRegisteringPin || pinInput.length !== 6}
-                        onClick={handleRegisterPin}
-                        className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold rounded-lg text-xs flex items-center gap-1 transition-all"
-                      >
-                        {isRegisteringPin ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                        <span>Register PIN</span>
-                      </button>
-                    </div>
+              {showPinRegister && (
+                <div className="mt-2 p-3 rounded-xl bg-black/50 border border-zinc-700/60 space-y-2.5">
+                  <p className="text-[11px] text-zinc-300 leading-relaxed">
+                    Meta requires entering the 6-digit Two-Step Verification PIN configured in Meta WhatsApp Manager for phone number <span className="font-mono text-emerald-400">+91 8129043397</span>:
+                  </p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input
+                      type="password"
+                      maxLength={6}
+                      placeholder="6-digit PIN"
+                      value={pinInput}
+                      onChange={(e) => setPinInput(e.target.value.replace(/\D/g, ''))}
+                      className="w-32 bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-white tracking-widest text-center focus:outline-none focus:border-emerald-500 font-mono"
+                    />
+                    <button
+                      type="button"
+                      disabled={isRegisteringPin || pinInput.length !== 6}
+                      onClick={handleRegisterPin}
+                      className="py-1.5 px-3.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold rounded-lg text-xs flex items-center gap-1 transition-all"
+                    >
+                      {isRegisteringPin ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                      <span>Register PIN with Meta</span>
+                    </button>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="flex items-center justify-between pt-1.5 border-t border-rose-900/40 text-[11px]">
-              <span className="text-zinc-400">Manual Fallback Option:</span>
-              <button
-                onClick={() => {
-                  const encoded = generateWhatsAppMessage();
-                  const cleanPhone = formatWhatsAppPhone(transaction.userMobile || transaction.phone || '');
-                  window.open(`https://wa.me/${cleanPhone}?text=${encoded}`, '_blank');
-                }}
-                className="text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1 transition-colors"
-                id="btn-fallback-open-whatsapp"
-              >
-                <ExternalLink className="w-3 h-3" />
-                <span>Open in WhatsApp Web</span>
-              </button>
-            </div>
-          )}
+          </div>
         </div>
       )}
 

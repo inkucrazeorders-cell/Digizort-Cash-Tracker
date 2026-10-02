@@ -78,6 +78,8 @@ import {
   MessageCircle,
   RefreshCw,
   AlertCircle,
+  ExternalLink,
+  Loader2,
 } from 'lucide-react';
 
 export const AdminPanel: React.FC = () => {
@@ -3232,6 +3234,108 @@ export const AdminPanel: React.FC = () => {
         request={offerModalRequest}
         onClose={() => setOfferModalRequest(null)}
       />
+
+      {/* Authentication WhatsApp Preview & Dispatch Modal */}
+      {authWhatsAppPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm select-none">
+          <div className="w-full max-w-lg bg-zinc-950 border border-zinc-800 rounded-3xl p-6 shadow-2xl relative space-y-4 select-auto">
+            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
+                  <MessageCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-white">
+                    Send WhatsApp to {authWhatsAppPreview.recipientName}
+                  </h3>
+                  <p className="text-[11px] text-zinc-400 font-mono">
+                    {authWhatsAppPreview.recipientMobile} • {authWhatsAppPreview.messageType === 'welcome' ? 'Welcome Message' : 'Security Upgrade Notice'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAuthWhatsAppPreview(null)}
+                className="p-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Message Preview Box */}
+            <div className="space-y-1.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                Message Preview:
+              </span>
+              <pre className="p-3.5 rounded-2xl bg-zinc-900 border border-zinc-800/80 text-xs font-mono text-zinc-200 whitespace-pre-wrap max-h-60 overflow-y-auto leading-relaxed select-text">
+                {authWhatsAppPreview.message}
+              </pre>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-800/80 flex-wrap">
+              <a
+                href={`https://wa.me/${authWhatsAppPreview.recipientMobile.replace(/\D/g, '')}?text=${encodeURIComponent(authWhatsAppPreview.message)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="py-2.5 px-3.5 rounded-xl bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-zinc-300 text-xs font-bold transition-colors flex items-center gap-1.5"
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Open in WhatsApp</span>
+              </a>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAuthWhatsAppPreview(null)}
+                  disabled={isSendingAuthWhatsApp}
+                  className="py-2.5 px-3.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white text-xs font-bold transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isSendingAuthWhatsApp}
+                  onClick={async () => {
+                    setIsSendingAuthWhatsApp(true);
+                    try {
+                      const res = await sendWhatsAppViaServer({
+                        to: authWhatsAppPreview.recipientMobile,
+                        message: authWhatsAppPreview.message,
+                        customerName: authWhatsAppPreview.recipientName,
+                      });
+                      if (res.success) {
+                        showToast(`WhatsApp sent successfully to ${authWhatsAppPreview.recipientName}!`);
+                        setAuthWhatsAppPreview(null);
+                      } else {
+                        if (res.isUnregistered && res.directWhatsAppUrl) {
+                          showToast('Sender active on phone app (133010). Opening direct WhatsApp...');
+                          window.open(res.directWhatsAppUrl, '_blank');
+                          setAuthWhatsAppPreview(null);
+                        } else {
+                          showToast(res.error || 'Failed to send WhatsApp message.');
+                        }
+                      }
+                    } catch (err: any) {
+                      showToast(err?.message || 'Error communicating with WhatsApp API.');
+                    } finally {
+                      setIsSendingAuthWhatsApp(false);
+                    }
+                  }}
+                  className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-lg shadow-emerald-600/25 flex items-center gap-1.5 transition-all"
+                >
+                  {isSendingAuthWhatsApp ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Send className="w-3.5 h-3.5" />
+                  )}
+                  <span>{isSendingAuthWhatsApp ? 'Sending...' : 'Send via Cloud API'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

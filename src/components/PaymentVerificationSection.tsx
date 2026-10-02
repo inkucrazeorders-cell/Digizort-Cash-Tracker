@@ -111,7 +111,12 @@ export const PaymentVerificationSection: React.FC<PaymentVerificationSectionProp
       if (res.success) {
         showToast('WhatsApp verification notice sent successfully!');
       } else {
-        showToast(`WhatsApp notice: ${res.error || 'Check server status'}`);
+        if (res.isUnregistered && res.directWhatsAppUrl) {
+          showToast('Sender active on WhatsApp App. Opening direct WhatsApp...');
+          window.open(res.directWhatsAppUrl, '_blank');
+        } else {
+          showToast(`WhatsApp notice: ${res.error || 'Check server status'}`);
+        }
       }
     } catch (err: any) {
       showToast(err?.message || 'Failed to send WhatsApp message');

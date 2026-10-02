@@ -92,6 +92,8 @@ export interface PaymentVerification {
   verificationStartedBy?: string;
   processedAt?: string;
   processedBy?: string;
+  verifiedBy?: string;
+  rejectedBy?: string;
   rejectionReason?: string;
   adminNotes?: string;
 }

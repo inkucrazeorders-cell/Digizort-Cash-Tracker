@@ -101,13 +101,17 @@ export async function sendWhatsAppViaServer(params: {
   details?: string;
   isUnregistered?: boolean;
   isWindowExpired?: boolean;
+  directWhatsAppUrl: string;
 }> {
   const normalizedPhone = normalizeWhatsAppNumber(params.to);
+  const fallbackUrl = `https://wa.me/${normalizedPhone || ''}?text=${encodeURIComponent(params.message || '')}`;
+
   if (!normalizedPhone) {
     return {
       success: false,
       error: 'Invalid recipient phone number format',
       details: `Phone number "${params.to}" is missing or invalid. Please check customer profile.`,
+      directWhatsAppUrl: fallbackUrl,
     };
   }
 
@@ -127,24 +131,20 @@ export async function sendWhatsAppViaServer(params: {
       }),
     });
 
-    const contentType = response.headers.get('content-type') || '';
     let data: any = null;
-
-    if (contentType.includes('application/json')) {
-      try {
-        data = await response.json();
-      } catch {
-        data = null;
-      }
+    try {
+      const rawText = await response.text();
+      data = JSON.parse(rawText);
+    } catch {
+      data = null;
     }
 
     if (!data) {
-      const rawText = await response.text();
-      const snippet = rawText.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
       return {
         success: false,
         error: `Server HTTP ${response.status}`,
-        details: snippet || 'Backend endpoint /api/whatsapp/send returned a non-JSON response.',
+        details: 'Backend endpoint /api/whatsapp/send returned an unexpected response.',
+        directWhatsAppUrl: fallbackUrl,
       };
     }
 
@@ -153,6 +153,7 @@ export async function sendWhatsAppViaServer(params: {
         success: true,
         messageId: data.message_id || data.messageId || 'sent',
         recipient: normalizedPhone,
+        directWhatsAppUrl: fallbackUrl,
       };
     }
 
@@ -162,12 +163,14 @@ export async function sendWhatsAppViaServer(params: {
       details: data.details || 'Meta WhatsApp Cloud API rejected the request.',
       isUnregistered: !!data.isUnregistered,
       isWindowExpired: !!data.isWindowExpired,
+      directWhatsAppUrl: data.directWhatsAppUrl || fallbackUrl,
     };
   } catch (err: any) {
     return {
       success: false,
       error: 'Network connection failure',
       details: err?.message || 'Could not reach server endpoint /api/whatsapp/send.',
+      directWhatsAppUrl: fallbackUrl,
     };
   }
 }

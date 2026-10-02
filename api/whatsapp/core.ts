@@ -28,6 +28,7 @@ export interface SendWhatsAppResult {
   details?: string;
   isUnregistered?: boolean;
   isWindowExpired?: boolean;
+  directWhatsAppUrl?: string;
 }
 
 /**
@@ -65,8 +66,12 @@ export function getWhatsAppConfigStatus(): WhatsAppConfig {
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '496013146934162';
   const businessAccountId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '507742449083763';
   const senderNumber = process.env.WHATSAPP_SENDER_NUMBER || '+91 8129043397';
-  // Use configured API version or stable current default v21.0
-  const apiVersion = process.env.WHATSAPP_API_VERSION || 'v21.0';
+  // Use configured API version or stable current default v21.0 (guard against invalid future versions like v26)
+  let apiVersion = process.env.WHATSAPP_API_VERSION || 'v21.0';
+  const matchVer = apiVersion.match(/v?(\d+)/);
+  if (matchVer && Number(matchVer[1]) > 22) {
+    apiVersion = 'v21.0';
+  }
 
   const hasToken = !!token && token.trim().length > 0;
   const hasPhoneId = !!phoneNumberId && phoneNumberId.trim().length > 0;
@@ -118,7 +123,13 @@ export async function sendWhatsAppMessageCore(params: {
 
   const token = process.env.WHATSAPP_API_TOKEN || process.env.WHATSAPP_ACCESS_TOKEN;
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID || '496013146934162';
-  const apiVersion = process.env.WHATSAPP_API_VERSION || 'v21.0';
+  let apiVersion = process.env.WHATSAPP_API_VERSION || 'v21.0';
+  const matchVer = apiVersion.match(/v?(\d+)/);
+  if (matchVer && Number(matchVer[1]) > 22) {
+    apiVersion = 'v21.0';
+  }
+
+  const directWhatsAppUrl = `https://wa.me/${cleanedPhone}?text=${encodeURIComponent(message || '')}`;
 
   // Server-side audit log (NEVER logs the token)
   console.log('[WhatsApp Cloud API] Dispatching message:', {
@@ -208,7 +219,7 @@ export async function sendWhatsAppMessageCore(params: {
       if (isUnregistered) {
         errorMsg = 'Sender number is not registered on WhatsApp Cloud API (Code 133010)';
         details =
-          'The sender number (+91 8129043397) has not completed Cloud API registration or is active on the mobile app. Complete registration in Meta WhatsApp Business Manager.';
+          'The sender number (+91 8129043397) has not completed Cloud API registration or is active on the mobile app. Complete registration in Meta WhatsApp Business Manager, or use 1-click WhatsApp.';
       } else if (isWindowExpired) {
         errorMsg = 'Meta 24-hour customer window restriction (Code 131047)';
         details =
@@ -226,6 +237,7 @@ export async function sendWhatsAppMessageCore(params: {
         details: details,
         isUnregistered,
         isWindowExpired,
+        directWhatsAppUrl,
       };
     }
 
@@ -239,6 +251,7 @@ export async function sendWhatsAppMessageCore(params: {
       recipient: cleanedPhone,
       request_id: requestId || 'N/A',
       customer_name: customerName || 'Customer',
+      directWhatsAppUrl,
     };
   } catch (fetchErr: any) {
     console.error('[WhatsApp Cloud API] Network error during Meta API fetch:', fetchErr);
