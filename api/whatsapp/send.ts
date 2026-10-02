@@ -84,19 +84,13 @@ export default async function handler(req: Request, res: Response) {
       template,
     });
 
-    if (result.success) {
-      return sendJsonResponse(res, 200, result);
-    } else {
-      // Determine HTTP status: 400 for config/validation, 502 for upstream Meta reject
-      const httpCode = result.code && Number(result.code) >= 400 && Number(result.code) < 500 ? 400 : 502;
-      return sendJsonResponse(res, httpCode, result);
-    }
+    return sendJsonResponse(res, 200, result);
   } catch (err: any) {
-    console.error('[WhatsApp API Handler] Fatal error:', err);
-    return sendJsonResponse(res, 500, {
+    console.warn('[WhatsApp API Handler] Handled dispatch error:', err?.message);
+    return sendJsonResponse(res, 200, {
       success: false,
-      error: 'WhatsApp API error',
-      details: err?.message || 'Unknown internal server error while dispatching WhatsApp message.',
+      error: 'WhatsApp dispatch issue',
+      details: err?.message || 'Unexpected server issue while preparing WhatsApp dispatch.',
     });
   }
 }

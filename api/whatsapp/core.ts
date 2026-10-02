@@ -199,8 +199,6 @@ export async function sendWhatsAppMessageCore(params: {
       data = { raw: rawText };
     }
 
-    console.log(`[WhatsApp Cloud API] Meta API HTTP ${statusCode} response:`, JSON.stringify(data));
-
     if (!metaResponse.ok) {
       const errCode = data?.error?.code;
       let errorMsg = data?.error?.message || `WhatsApp Cloud API error (HTTP ${statusCode})`;
@@ -208,8 +206,8 @@ export async function sendWhatsAppMessageCore(params: {
 
       const isUnregistered =
         errCode === 133010 ||
-        errorMsg.includes('133010') ||
-        errorMsg.toLowerCase().includes('account not registered');
+        data?.error?.message?.includes('133010') ||
+        data?.error?.message?.toLowerCase().includes('account not registered');
 
       const isWindowExpired =
         errCode === 131047 ||
@@ -217,17 +215,22 @@ export async function sendWhatsAppMessageCore(params: {
         errorMsg.toLowerCase().includes('24 hours');
 
       if (isUnregistered) {
+        console.log('[WhatsApp Cloud API] Account requires direct WhatsApp fallback (Meta Code 133010).');
         errorMsg = 'Sender number is not registered on WhatsApp Cloud API (Code 133010)';
         details =
           'The sender number (+91 8129043397) has not completed Cloud API registration or is active on the mobile app. Complete registration in Meta WhatsApp Business Manager, or use 1-click WhatsApp.';
       } else if (isWindowExpired) {
+        console.log(`[WhatsApp Cloud API] Notice: 24-hour customer window restriction (Code 131047).`);
         errorMsg = 'Meta 24-hour customer window restriction (Code 131047)';
         details =
           'Freeform WhatsApp messages can only be sent within 24 hours of customer interaction. Outside 24 hours, an approved WhatsApp Message Template is required.';
       } else if (errCode === 190 || errCode === 102) {
+        console.log(`[WhatsApp Cloud API] Notice: Token invalid or expired.`);
         errorMsg = 'Invalid or expired WhatsApp API Token';
         details =
           'The WHATSAPP_API_TOKEN in server environment variables is invalid or expired. Generate a permanent System User Token in Meta Business Suite.';
+      } else {
+        console.log(`[WhatsApp Cloud API] Notice: Meta API returned status ${statusCode}`);
       }
 
       return {
